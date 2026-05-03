@@ -1,0 +1,111 @@
+{% extends 'tickets/base.html' %}
+{% block title %}#{{ ticket.pk }} {{ ticket.title }} — ITSM{% endblock %}
+{% block content %}
+<div style="display:flex;align-items:center;gap:.75rem;margin-bottom:1.25rem;">
+  <a href="{% url 'ticket_list' %}" style="color:#64748b;font-size:13px;">← Tickets</a>
+  <h1 style="margin:0;">Ticket #{{ ticket.pk }}</h1>
+  <span class="badge badge-{{ ticket.status }}">{{ ticket.get_status_display }}</span>
+</div>
+
+<div class="card">
+  <div style="font-size:17px;font-weight:700;margin-bottom:.5rem;">{{ ticket.title }}</div>
+  {% if ticket.description %}<p style="white-space:pre-wrap;">{{ ticket.description }}</p>{% endif %}
+  <p style="margin-top:.5rem;font-size:12px;color:#94a3b8;">Created {{ ticket.created_at|date:"Y-m-d H:i" }}</p>
+</div>
+
+<!-- Status change -->
+<div class="card">
+  <h2>Change status</h2>
+  <form method="post" style="display:flex;gap:.75rem;align-items:flex-end;">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="status">
+    <div style="flex:1;">
+      <label style="margin-top:0;">{{ status_form.status.label }}</label>
+      {{ status_form.status }}
+    </div>
+    <button type="submit" class="btn btn-primary btn-sm">Update</button>
+  </form>
+</div>
+
+<!-- Schedule entries -->
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.75rem;">
+    <h2 style="margin:0;">Schedule entries</h2>
+    {% if user_role == 'ops' %}
+      <a href="{% url 'schedule_entry_add' ticket.pk %}" class="btn btn-primary btn-sm">Add schedule entry</a>
+    {% endif %}
+  </div>
+  {% if ticket.schedule_entries.all %}
+    <table>
+      <thead><tr><th>Engineer</th><th>Start</th><th>End</th></tr></thead>
+      <tbody>
+        {% for e in ticket.schedule_entries.all %}
+        <tr>
+          <td>{{ e.engineer.username }}</td>
+          <td>{{ e.start|date:"Y-m-d H:i" }}</td>
+          <td>{{ e.end|date:"Y-m-d H:i" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p style="color:#94a3b8;font-size:13px;">None.</p>
+  {% endif %}
+</div>
+
+<!-- Time entries -->
+<div class="card">
+  <h2>Time entries</h2>
+  {% if ticket.time_entries.all %}
+    <table style="margin-bottom:1rem;">
+      <thead><tr><th>Engineer</th><th>Start</th><th>End</th><th>Notes</th></tr></thead>
+      <tbody>
+        {% for e in ticket.time_entries.all %}
+        <tr>
+          <td>{{ e.engineer.username }}</td>
+          <td style="white-space:nowrap;">{{ e.start|date:"Y-m-d H:i" }}</td>
+          <td style="white-space:nowrap;">{{ e.end|date:"Y-m-d H:i" }}</td>
+          <td>{{ e.notes }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p style="color:#94a3b8;font-size:13px;margin-bottom:1rem;">None.</p>
+  {% endif %}
+
+  {% if user_role == 'engineer' %}
+    <h2>Log time</h2>
+    <form method="post" style="max-width:420px;">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="time">
+
+      <label>{{ time_form.notes.label }}</label>
+      {{ time_form.notes }}
+      {% if time_form.notes.errors %}<p style="color:#b91c1c;font-size:12px;margin-top:4px;">{{ time_form.notes.errors.0 }}</p>{% endif %}
+
+      <label style="margin-top:.75rem;">{{ time_form.date.label }}</label>
+      {{ time_form.date }}
+      {% if time_form.date.errors %}<p style="color:#b91c1c;font-size:12px;margin-top:4px;">{{ time_form.date.errors.0 }}</p>{% endif %}
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem;margin-top:.75rem;">
+        <div>
+          <label style="margin-top:0;">{{ time_form.start_time.label }}</label>
+          {{ time_form.start_time }}
+          {% if time_form.start_time.errors %}<p style="color:#b91c1c;font-size:12px;margin-top:4px;">{{ time_form.start_time.errors.0 }}</p>{% endif %}
+        </div>
+        <div>
+          <label style="margin-top:0;">{{ time_form.end_time.label }}</label>
+          {{ time_form.end_time }}
+          {% if time_form.end_time.errors %}<p style="color:#b91c1c;font-size:12px;margin-top:4px;">{{ time_form.end_time.errors.0 }}</p>{% endif %}
+        </div>
+      </div>
+      <p style="font-size:11px;color:#94a3b8;margin-top:6px;">Enter times as 4 digits — e.g. <strong>0900</strong>, <strong>1430</strong></p>
+
+      <div class="mt2">
+        <button type="submit" class="btn btn-primary btn-sm">Save time entry</button>
+      </div>
+    </form>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,147 @@
+{% extends 'tickets/base.html' %}
+{% block title %}Calendar — ITSM{% endblock %}
+{% block content %}
+
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;">
+  <h1 style="margin:0;">Calendar</h1>
+  <div class="view-tabs">
+    <a href="?view=week" class="btn btn-sm {% if view_mode == 'week' %}btn-primary{% else %}btn-outline{% endif %}">Week</a>
+    <a href="?view=day&day={{ today|date:'Y-m-d' }}" class="btn btn-sm {% if view_mode == 'day' %}btn-primary{% else %}btn-outline{% endif %}">Day</a>
+    <a href="?view=agenda" class="btn btn-sm {% if view_mode == 'agenda' %}btn-primary{% else %}btn-outline{% endif %}">Agenda</a>
+  </div>
+</div>
+
+{% if view_mode == 'agenda' %}
+
+  <div style="margin-bottom:.75rem;font-size:13px;color:#64748b;">Upcoming — next 60 entries</div>
+  {% if agenda_entries %}
+  <div class="card" style="padding:0;overflow:hidden;">
+    {% for item in agenda_entries %}
+    <div class="agenda-row">
+      <div class="agenda-date">
+        {{ item.entry.start|date:"D, M j" }}<br>
+        <span style="font-size:11px;">{{ item.entry.start|date:"H:i" }}–{{ item.entry.end|date:"H:i" }}</span>
+      </div>
+      <div>
+        <span class="badge {% if item.kind == 'schedule' %}badge-scheduled{% else %}badge-complete{% endif %}" style="margin-bottom:4px;">
+          {% if item.kind == 'schedule' %}Scheduled{% else %}Time logged{% endif %}
+        </span><br>
+        <a href="{% url 'ticket_detail' item.entry.ticket_id %}" style="font-size:13px;font-weight:600;">
+          #{{ item.entry.ticket_id }} — {{ item.entry.ticket.title }}
+        </a>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p style="color:#64748b;">No upcoming entries.</p>
+  {% endif %}
+
+{% else %}
+
+  <div style="display:flex;align-items:center;gap:1rem;margin-bottom:.75rem;">
+    <a href="{{ prev_nav }}" class="btn btn-outline btn-sm">←</a>
+    {% if view_mode == 'day' %}
+      <span style="font-weight:700;">{{ week_days.0|date:"l, N j, Y" }}</span>
+    {% else %}
+      <span style="font-weight:700;">{{ week_days.0|date:"M j" }} – {{ week_days.6|date:"M j, Y" }}</span>
+    {% endif %}
+    <a href="{{ next_nav }}" class="btn btn-outline btn-sm">→</a>
+  </div>
+
+  <div style="display:flex;gap:.75rem;font-size:11px;margin-bottom:.5rem;">
+    <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#dbeafe;vertical-align:middle;"></span> Scheduled</span>
+    <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#dcfce7;vertical-align:middle;"></span> Time logged</span>
+  </div>
+
+  <div class="cal-outer">
+    {# Day header row #}
+    <div class="cal-head-row">
+      <div class="cal-gutter-head"></div>
+      {% for col in day_cols %}
+      <div class="cal-col-head {% if col.date == today %}today{% endif %}">
+        <div>{{ col.date|date:"D" }}</div>
+        <div style="font-size:17px;">{{ col.date|date:"j" }}</div>
+      </div>
+      {% endfor %}
+    </div>
+
+    {# Scrollable body #}
+    <div class="cal-scroll">
+      <div class="cal-body" style="height:{{ grid_height }}px;">
+
+        {# Time gutter #}
+        <div class="cal-gutter">
+          {% for m in hour_markers %}
+          <span class="cal-hour-lbl" style="top:{{ m.top }}px;">{{ m.hour }}:00</span>
+          {% endfor %}
+        </div>
+
+        {# Day columns #}
+        <div class="cal-cols">
+          {% for col in day_cols %}
+          <div class="cal-day-col {% if col.date == today %}today{% endif %}">
+
+            {# Gray zones (non-work hours) #}
+            {% for gz in col.gray_zones %}
+            <div class="cal-gray-zone" style="top:{{ gz.top }}px; height:{{ gz.height }}px;"></div>
+            {% endfor %}
+
+            {# Hour lines #}
+            {% for m in hour_markers %}
+            <div class="cal-hr-line {% if forloop.first or forloop.last %}bold{% endif %}"
+                 style="top:{{ m.top }}px;"></div>
+            {% endfor %}
+
+            {# Current-time indicator #}
+            {% if col.date == today %}<div class="cal-now-line" id="cal-now-line"></div>{% endif %}
+
+            {# Events #}
+            {% for ev in col.events %}
+            <a href="{% url 'ticket_detail' ev.entry.ticket_id %}"
+               class="cal-evt {% if ev.kind == 'schedule' %}cal-evt-schedule{% else %}cal-evt-logged{% endif %}"
+               style="top:{{ ev.top }}px; height:{{ ev.height }}px; left:calc({{ ev.left_pct }}% + 2px); width:calc({{ ev.width_pct }}% - 4px);"
+               title="#{{ ev.entry.ticket_id }} {{ ev.entry.ticket.title }} — {{ ev.entry.start|date:'H:i' }}–{{ ev.entry.end|date:'H:i' }}">
+              <span class="cal-evt-title">#{{ ev.entry.ticket_id }} {{ ev.entry.ticket.title }}</span>
+              {% if ev.height > 28 %}
+              <span class="cal-evt-time">{{ ev.entry.start|date:"H:i" }}–{{ ev.entry.end|date:"H:i" }}</span>
+              {% endif %}
+            </a>
+            {% endfor %}
+
+          </div>
+          {% endfor %}
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+{% endif %}
+
+{% if scroll_to %}
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  var el = document.querySelector('.cal-scroll');
+  if (el) el.scrollTop = {{ scroll_to }};
+});
+</script>
+{% endif %}
+
+<script>
+(function () {
+  var GRID_START = 7, PX_PER_HOUR = 64, GRID_HEIGHT = {{ grid_height|default:832 }};
+  function positionNowLine() {
+    var line = document.getElementById('cal-now-line');
+    if (!line) return;
+    var now = new Date();
+    var top = Math.round(((now.getHours() - GRID_START) * 60 + now.getMinutes()) * PX_PER_HOUR / 60);
+    if (top < 0 || top > GRID_HEIGHT) { line.style.display = 'none'; return; }
+    line.style.display = '';
+    line.style.top = top + 'px';
+  }
+  positionNowLine();
+  setInterval(positionNowLine, 10 * 60 * 1000);
+})();
+</script>
+{% endblock %}

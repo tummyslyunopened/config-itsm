@@ -1,0 +1,201 @@
+{% extends 'tickets/base.html' %}
+{% block title %}Queue — ITSM{% endblock %}
+
+{% block body %}
+<div class="two-pane">
+
+  {# ── Left pane: ticket queue ── #}
+  <div class="pane-left">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.75rem;">
+      <div class="pane-heading" style="margin:0;">Queue ({{ tickets|length }})</div>
+      <a href="{% url 'ticket_create' %}?next={% url 'queue' %}" class="btn btn-primary btn-sm" title="New ticket">+</a>
+    </div>
+    {% if tickets %}
+      {% for t in tickets %}
+      <div class="ticket-card" draggable="true" data-ticket-id="{{ t.pk }}">
+        <div class="tc-num">#{{ t.pk }} &nbsp;<span class="badge badge-{{ t.status }}">{{ t.get_status_display }}</span></div>
+        <div class="tc-note">{{ t.title }}</div>
+      </div>
+      {% endfor %}
+    {% else %}
+      <p style="color:#94a3b8;font-size:13px;">Queue is empty.</p>
+    {% endif %}
+  </div>
+
+  {# ── Right pane: engineer calendar ── #}
+  <div class="pane-right">
+    <div style="display:flex;align-items:center;gap:1rem;margin-bottom:1rem;flex-wrap:wrap;">
+      <div class="pane-heading" style="margin:0;">Engineer Calendar</div>
+
+      {# Engineer selector #}
+      <form method="get" style="display:flex;align-items:center;gap:.5rem;margin:0;">
+        <input type="hidden" name="week" value="{{ monday|date:'Y-m-d' }}">
+        <select name="engineer" onchange="this.form.submit()"
+                style="border:1px solid #d1d5db;border-radius:4px;padding:.3rem .5rem;font-size:13px;background:#fff;">
+          <option value="">— select engineer —</option>
+          {% for eng in engineers %}
+          <option value="{{ eng.pk }}" {% if eng == selected_engineer %}selected{% endif %}>{{ eng.username }}</option>
+          {% endfor %}
+        </select>
+      </form>
+
+      {% if selected_engineer %}
+      {# Week navigation — preserve engineer selection #}
+      <div style="display:flex;align-items:center;gap:.5rem;margin-left:auto;">
+        <a href="{{ prev_week }}" class="btn btn-outline btn-sm">←</a>
+        <span style="font-size:13px;font-weight:700;">{{ week_days.0|date:"M j" }} – {{ week_days.6|date:"M j, Y" }}</span>
+        <a href="{{ next_week }}" class="btn btn-outline btn-sm">→</a>
+      </div>
+      {% endif %}
+    </div>
+
+    {% if not selected_engineer %}
+      <p style="color:#94a3b8;margin-top:2rem;text-align:center;">No engineers found.</p>
+    {% else %}
+      <div style="font-size:11px;color:#64748b;margin-bottom:.5rem;">
+        Drag a ticket onto a time slot to schedule it.
+      </div>
+
+      <div class="cal-outer">
+        {# Day header #}
+        <div class="cal-head-row">
+          <div class="cal-gutter-head"></div>
+          {% for col in day_cols %}
+          <div class="cal-col-head {% if col.date == today %}today{% endif %}">
+            <div>{{ col.date|date:"D" }}</div>
+            <div style="font-size:15px;">{{ col.date|date:"j" }}</div>
+          </div>
+          {% endfor %}
+        </div>
+
+        {# Scrollable body #}
+        <div class="cal-scroll">
+          <div class="cal-body" style="height:{{ grid_height }}px;">
+
+            {# Time gutter #}
+            <div class="cal-gutter">
+              {% for m in hour_markers %}
+              <span class="cal-hour-lbl" style="top:{{ m.top }}px;">{{ m.hour }}:00</span>
+              {% endfor %}
+            </div>
+
+            {# Day columns #}
+            <div class="cal-cols">
+              {% for col in day_cols %}
+              <div class="cal-day-col {% if col.date == today %}today{% endif %}">
+
+                {# Gray zones (non-work hours) #}
+                {% for gz in col.gray_zones %}
+                <div class="cal-gray-zone" style="top:{{ gz.top }}px; height:{{ gz.height }}px;"></div>
+                {% endfor %}
+
+                {# Hour lines #}
+                {% for m in hour_markers %}
+                <div class="cal-hr-line {% if forloop.first or forloop.last %}bold{% endif %}"
+                     style="top:{{ m.top }}px;"></div>
+                {% endfor %}
+
+                {# Drop zones — one per hour, behind events #}
+                {% for dz in drop_zones %}
+                <div class="cal-drop-zone"
+                     data-droppable="1"
+                     data-engineer-id="{{ selected_engineer.pk }}"
+                     data-day="{{ col.date|date:'Y-m-d' }}"
+                     data-hour="{{ dz.hour }}"
+                     style="top:{{ dz.top }}px; height:64px;"></div>
+                {% endfor %}
+
+                {# Current-time indicator #}
+                {% if col.date == today %}<div class="cal-now-line" id="cal-now-line"></div>{% endif %}
+
+                {# Scheduled events #}
+                {% for ev in col.events %}
+                <a href="{% url 'ticket_detail' ev.entry.ticket_id %}"
+                   class="cal-evt cal-evt-schedule"
+                   style="top:{{ ev.top }}px; height:{{ ev.height }}px; left:calc({{ ev.left_pct }}% + 2px); width:calc({{ ev.width_pct }}% - 4px);"
+                   title="#{{ ev.entry.ticket_id }} {{ ev.entry.ticket.title }} — {{ ev.entry.start|date:'H:i' }}–{{ ev.entry.end|date:'H:i' }}">
+                  <span class="cal-evt-title">#{{ ev.entry.ticket_id }} {{ ev.entry.ticket.title }}</span>
+                  {% if ev.height > 28 %}
+                  <span class="cal-evt-time">{{ ev.entry.start|date:"H:i" }}–{{ ev.entry.end|date:"H:i" }}</span>
+                  {% endif %}
+                </a>
+                {% endfor %}
+
+              </div>
+              {% endfor %}
+            </div>
+
+          </div>
+        </div>
+      </div>
+    {% endif %}
+  </div>
+</div>
+
+{% if scroll_to %}
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  var el = document.querySelector('.cal-scroll');
+  if (el) el.scrollTop = {{ scroll_to }};
+});
+</script>
+{% endif %}
+
+<script>
+(function () {
+  var GRID_START = 7, PX_PER_HOUR = 64, GRID_HEIGHT = {{ grid_height }};
+  function positionNowLine() {
+    var line = document.getElementById('cal-now-line');
+    if (!line) return;
+    var now = new Date();
+    var top = Math.round(((now.getHours() - GRID_START) * 60 + now.getMinutes()) * PX_PER_HOUR / 60);
+    if (top < 0 || top > GRID_HEIGHT) { line.style.display = 'none'; return; }
+    line.style.display = '';
+    line.style.top = top + 'px';
+  }
+  positionNowLine();
+  setInterval(positionNowLine, 10 * 60 * 1000);
+})();
+</script>
+
+<script>
+(function () {
+  document.querySelectorAll('.ticket-card').forEach(function (card) {
+    card.addEventListener('dragstart', function (e) {
+      e.dataTransfer.setData('ticketId', card.dataset.ticketId);
+      e.dataTransfer.effectAllowed = 'move';
+      setTimeout(function () { card.classList.add('dragging'); }, 0);
+    });
+    card.addEventListener('dragend', function () { card.classList.remove('dragging'); });
+    card.addEventListener('click', function () {
+      window.location.href = '/tickets/' + card.dataset.ticketId + '/';
+    });
+  });
+
+  document.querySelectorAll('.cal-drop-zone[data-droppable]').forEach(function (zone) {
+    zone.addEventListener('dragover', function (e) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      zone.classList.add('drag-over');
+    });
+    zone.addEventListener('dragleave', function (e) {
+      if (!zone.contains(e.relatedTarget)) zone.classList.remove('drag-over');
+    });
+    zone.addEventListener('drop', function (e) {
+      e.preventDefault();
+      zone.classList.remove('drag-over');
+      var ticketId = e.dataTransfer.getData('ticketId');
+      if (!ticketId) return;
+      var day  = zone.dataset.day;
+      var hour = parseInt(zone.dataset.hour, 10);
+      var engId = zone.dataset.engineerId;
+      var pad = function (n) { return String(n).padStart(2, '0'); };
+      var start = day + 'T' + pad(hour) + ':00';
+      var end   = day + 'T' + pad(hour + 1) + ':00';
+      window.location.href = '/tickets/' + ticketId + '/schedule/'
+        + '?engineer=' + engId + '&start=' + start + '&end=' + end;
+    });
+  });
+})();
+</script>
+{% endblock %}

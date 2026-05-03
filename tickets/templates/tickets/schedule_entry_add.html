@@ -1,0 +1,46 @@
+{% extends 'tickets/base.html' %}
+{% block title %}Add Schedule Entry — ITSM{% endblock %}
+{% block content %}
+<div style="display:flex;align-items:center;gap:.75rem;margin-bottom:1.25rem;">
+  <a href="{% url 'ticket_detail' ticket.pk %}" style="color:#64748b;font-size:13px;">← Ticket #{{ ticket.pk }}</a>
+  <h1 style="margin:0;">Add Schedule Entry</h1>
+</div>
+<div class="card" style="max-width:420px;">
+  <form method="post">
+    {% csrf_token %}
+
+    <label>{{ form.engineer.label }}</label>
+    {{ form.engineer }}
+    {% if form.engineer.errors %}<p style="color:#b91c1c;font-size:12px;margin-top:4px;">{{ form.engineer.errors.0 }}</p>{% endif %}
+
+    <label style="margin-top:1rem;">{{ form.date.label }}</label>
+    {{ form.date }}
+    {% if form.date.errors %}<p style="color:#b91c1c;font-size:12px;margin-top:4px;">{{ form.date.errors.0 }}</p>{% endif %}
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem;margin-top:.75rem;">
+      <div>
+        <label style="margin-top:0;">{{ form.start_time.label }}</label>
+        {{ form.start_time }}
+        {% if form.start_time.errors %}<p style="color:#b91c1c;font-size:12px;margin-top:4px;">{{ form.start_time.errors.0 }}</p>{% endif %}
+      </div>
+      <div>
+        <label style="margin-top:0;">{{ form.end_time.label }}</label>
+        {{ form.end_time }}
+        {% if form.end_time.errors %}<p style="color:#b91c1c;font-size:12px;margin-top:4px;">{{ form.end_time.errors.0 }}</p>{% endif %}
+      </div>
+    </div>
+    <p style="font-size:11px;color:#94a3b8;margin-top:6px;">Enter times as 4 digits — e.g. <strong>0900</strong>, <strong>1430</strong></p>
+
+    {% if schedule_error %}
+    <div style="margin-top:.75rem;padding:.6rem .75rem;background:#fee2e2;color:#b91c1c;border-radius:4px;font-size:13px;">
+      {{ schedule_error }}
+    </div>
+    {% endif %}
+
+    <div class="mt2">
+      <button type="submit" class="btn btn-primary">Save</button>
+      <a href="{% url 'ticket_detail' ticket.pk %}" style="margin-left:.75rem;color:#64748b;font-size:13px;">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

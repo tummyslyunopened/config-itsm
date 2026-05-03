@@ -1,0 +1,20 @@
+{% extends 'tickets/base.html' %}
+{% block title %}New Ticket — ITSM{% endblock %}
+{% block content %}
+<h1>New Ticket</h1>
+<div class="card" style="max-width:600px;">
+  <form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="next" value="{{ next_url }}">
+    {% for field in form %}
+      <label>{{ field.label }}</label>
+      {{ field }}
+      {% if field.errors %}<p style="color:#b91c1c;font-size:12px;margin-top:4px;">{{ field.errors.0 }}</p>{% endif %}
+    {% endfor %}
+    <div class="mt2">
+      <button type="submit" class="btn btn-primary">Create ticket</button>
+      <a href="{{ next_url }}" style="margin-left:.75rem;color:#64748b;font-size:13px;">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

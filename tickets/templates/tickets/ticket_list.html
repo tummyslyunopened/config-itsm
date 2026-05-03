@@ -1,0 +1,32 @@
+{% extends 'tickets/base.html' %}
+{% block title %}Tickets — ITSM{% endblock %}
+{% block content %}
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.25rem;">
+  <h1 style="margin:0;">Tickets</h1>
+  <a href="{% url 'ticket_create' %}" class="btn btn-primary">New ticket</a>
+</div>
+{% if tickets %}
+<table>
+  <thead>
+    <tr>
+      <th>#</th>
+      <th>Status</th>
+      <th>Title</th>
+      <th>Created</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for t in tickets %}
+    <tr>
+      <td><a href="{% url 'ticket_detail' t.pk %}">#{{ t.pk }}</a></td>
+      <td><span class="badge badge-{{ t.status }}">{{ t.get_status_display }}</span></td>
+      <td><a href="{% url 'ticket_detail' t.pk %}">{{ t.title }}</a></td>
+      <td style="white-space:nowrap;color:#64748b;">{{ t.created_at|date:"Y-m-d H:i" }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p style="color:#64748b;">No tickets yet.</p>
+{% endif %}
+{% endblock %}
