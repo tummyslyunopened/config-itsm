@@ -1,136 +1,186 @@
 {% extends 'tickets/base.html' %}
 {% block title %}Calendar — ITSM{% endblock %}
-{% block content %}
 
-<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;">
-  <h1 style="margin:0;">Calendar</h1>
-  <div class="view-tabs">
-    <a href="?view=week" class="btn btn-sm {% if view_mode == 'week' %}btn-primary{% else %}btn-outline{% endif %}">Week</a>
-    <a href="?view=day&day={{ today|date:'Y-m-d' }}" class="btn btn-sm {% if view_mode == 'day' %}btn-primary{% else %}btn-outline{% endif %}">Day</a>
-    <a href="?view=agenda" class="btn btn-sm {% if view_mode == 'agenda' %}btn-primary{% else %}btn-outline{% endif %}">Agenda</a>
-  </div>
-</div>
+{% block body %}
+<div style="display:flex;height:calc(100vh - 48px);overflow:hidden;">
 
-{% if view_mode == 'agenda' %}
+  {# ── LEFT: CALENDAR ───────────────────────────────────────────────────── #}
+  <div style="flex:1;min-width:0;display:flex;flex-direction:column;padding:1rem 1rem 0;overflow:hidden;">
 
-  <div style="margin-bottom:.75rem;font-size:13px;color:#64748b;">Upcoming — next 60 entries</div>
-  {% if agenda_entries %}
-  <div class="card" style="padding:0;overflow:hidden;">
-    {% for item in agenda_entries %}
-    <div class="agenda-row">
-      <div class="agenda-date">
-        {{ item.entry.start|date:"D, M j" }}<br>
-        <span style="font-size:11px;">{{ item.entry.start|date:"H:i" }}–{{ item.entry.end|date:"H:i" }}</span>
+    {# Header row #}
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.75rem;flex-shrink:0;">
+      <div style="display:flex;align-items:center;gap:1rem;">
+        <h1 style="margin:0;font-size:18px;">Calendar</h1>
+        {% if view_mode != 'agenda' %}
+        <a href="{{ prev_nav }}" class="btn btn-outline btn-sm">←</a>
+        {% if view_mode == 'day' %}
+          <span style="font-weight:700;font-size:13px;">{{ week_days.0|date:"l, N j, Y" }}</span>
+        {% else %}
+          <span style="font-weight:700;font-size:13px;">{{ week_days.0|date:"M j" }} – {{ week_days.6|date:"M j, Y" }}</span>
+        {% endif %}
+        <a href="{{ next_nav }}" class="btn btn-outline btn-sm">→</a>
+        {% endif %}
       </div>
-      <div>
-        <span class="badge {% if item.kind == 'schedule' %}badge-scheduled{% else %}badge-complete{% endif %}" style="margin-bottom:4px;">
-          {% if item.kind == 'schedule' %}Scheduled{% else %}Time logged{% endif %}
-        </span><br>
-        <a href="{% url 'ticket_detail' item.entry.ticket_id %}" style="font-size:13px;font-weight:600;">
-          #{{ item.entry.ticket_id }} — {{ item.entry.ticket.title }}
-        </a>
+      <div class="view-tabs">
+        <a href="?view=week" class="btn btn-sm {% if view_mode == 'week' %}btn-primary{% else %}btn-outline{% endif %}">Week</a>
+        <a href="?view=day&day={{ today|date:'Y-m-d' }}" class="btn btn-sm {% if view_mode == 'day' %}btn-primary{% else %}btn-outline{% endif %}">Day</a>
+        <a href="?view=agenda" class="btn btn-sm {% if view_mode == 'agenda' %}btn-primary{% else %}btn-outline{% endif %}">Agenda</a>
       </div>
     </div>
-    {% endfor %}
-  </div>
-  {% else %}
-  <p style="color:#64748b;">No upcoming entries.</p>
-  {% endif %}
 
-{% else %}
-
-  <div style="display:flex;align-items:center;gap:1rem;margin-bottom:.75rem;">
-    <a href="{{ prev_nav }}" class="btn btn-outline btn-sm">←</a>
-    {% if view_mode == 'day' %}
-      <span style="font-weight:700;">{{ week_days.0|date:"l, N j, Y" }}</span>
-    {% else %}
-      <span style="font-weight:700;">{{ week_days.0|date:"M j" }} – {{ week_days.6|date:"M j, Y" }}</span>
-    {% endif %}
-    <a href="{{ next_nav }}" class="btn btn-outline btn-sm">→</a>
-  </div>
-
-  <div style="display:flex;gap:.75rem;font-size:11px;margin-bottom:.5rem;">
-    <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#dbeafe;vertical-align:middle;"></span> Scheduled</span>
-    <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#dcfce7;vertical-align:middle;"></span> Time logged</span>
-  </div>
-
-  <div class="cal-outer">
-    {# Day header row #}
-    <div class="cal-head-row">
-      <div class="cal-gutter-head"></div>
-      {% for col in day_cols %}
-      <div class="cal-col-head {% if col.date == today %}today{% endif %}">
-        <div>{{ col.date|date:"D" }}</div>
-        <div style="font-size:17px;">{{ col.date|date:"j" }}</div>
-      </div>
-      {% endfor %}
-    </div>
-
-    {# Scrollable body #}
-    <div class="cal-scroll">
-      <div class="cal-body" style="height:{{ grid_height }}px;">
-
-        {# Time gutter #}
-        <div class="cal-gutter">
-          {% for m in hour_markers %}
-          <span class="cal-hour-lbl" style="top:{{ m.top }}px;">{{ m.hour }}:00</span>
-          {% endfor %}
-        </div>
-
-        {# Day columns #}
-        <div class="cal-cols">
-          {% for col in day_cols %}
-          <div class="cal-day-col {% if col.date == today %}today{% endif %}">
-
-            {# Gray zones (non-work hours) #}
-            {% for gz in col.gray_zones %}
-            <div class="cal-gray-zone" style="top:{{ gz.top }}px; height:{{ gz.height }}px;"></div>
-            {% endfor %}
-
-            {# Hour lines #}
-            {% for m in hour_markers %}
-            <div class="cal-hr-line {% if forloop.first or forloop.last %}bold{% endif %}"
-                 style="top:{{ m.top }}px;"></div>
-            {% endfor %}
-
-            {# Current-time indicator #}
-            {% if col.date == today %}<div class="cal-now-line" id="cal-now-line"></div>{% endif %}
-
-            {# Events #}
-            {% for ev in col.events %}
-            <a href="{% url 'ticket_detail' ev.entry.ticket_id %}"
-               class="cal-evt {% if ev.kind == 'schedule' %}cal-evt-schedule{% else %}cal-evt-logged{% endif %}"
-               style="top:{{ ev.top }}px; height:{{ ev.height }}px; left:calc({{ ev.left_pct }}% + 2px); width:calc({{ ev.width_pct }}% - 4px);"
-               title="#{{ ev.entry.ticket_id }} {{ ev.entry.ticket.title }} — {{ ev.entry.start|date:'H:i' }}–{{ ev.entry.end|date:'H:i' }}">
-              <span class="cal-evt-title">#{{ ev.entry.ticket_id }} {{ ev.entry.ticket.title }}</span>
-              {% if ev.height > 28 %}
-              <span class="cal-evt-time">{{ ev.entry.start|date:"H:i" }}–{{ ev.entry.end|date:"H:i" }}</span>
-              {% endif %}
-            </a>
-            {% endfor %}
-
+    {% if view_mode == 'agenda' %}
+    {# ── AGENDA ── #}
+    <div style="flex:1;overflow-y:auto;padding-bottom:1rem;">
+      <div style="margin-bottom:.75rem;font-size:13px;color:#64748b;">Upcoming — next 60 entries</div>
+      {% if agenda_entries %}
+      <div class="card" style="padding:0;overflow:hidden;">
+        {% for item in agenda_entries %}
+        <div class="agenda-row">
+          <div class="agenda-date">
+            {{ item.entry.start|date:"D, M j" }}<br>
+            <span style="font-size:11px;">{{ item.entry.start|date:"H:i" }}–{{ item.entry.end|date:"H:i" }}</span>
           </div>
-          {% endfor %}
+          <div>
+            <span class="badge {% if item.kind == 'schedule' %}badge-scheduled{% else %}badge-complete{% endif %}" style="margin-bottom:4px;">
+              {% if item.kind == 'schedule' %}Scheduled{% else %}Time logged{% endif %}
+            </span><br>
+            <a href="{% url 'ticket_detail' item.entry.ticket_id %}" style="font-size:13px;font-weight:600;">
+              #{{ item.entry.ticket_id }} — {{ item.entry.ticket.title }}
+            </a>
+          </div>
         </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p style="color:#64748b;">No upcoming entries.</p>
+      {% endif %}
+    </div>
 
+    {% else %}
+    {# ── WEEK / DAY GRID ── #}
+    <div style="display:flex;gap:.75rem;font-size:11px;margin-bottom:.5rem;flex-shrink:0;">
+      <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#dbeafe;vertical-align:middle;"></span> Scheduled</span>
+      <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#dcfce7;vertical-align:middle;"></span> Time logged</span>
+    </div>
+
+    <div class="cal-outer" style="flex:1;display:flex;flex-direction:column;overflow:hidden;min-height:0;">
+      {# Day header row #}
+      <div class="cal-head-row" style="flex-shrink:0;">
+        <div class="cal-gutter-head"></div>
+        {% for col in day_cols %}
+        <div class="cal-col-head {% if col.date == today %}today{% endif %}">
+          <div>{{ col.date|date:"D" }}</div>
+          <div style="font-size:17px;">{{ col.date|date:"j" }}</div>
+        </div>
+        {% endfor %}
+      </div>
+
+      {# Scrollable body #}
+      <div class="cal-scroll" id="cal-scroll" style="flex:1;overflow-y:auto;max-height:none;">
+        <div class="cal-body" style="height:{{ grid_height }}px;">
+
+          {# Time gutter #}
+          <div class="cal-gutter">
+            {% for m in hour_markers %}
+            <span class="cal-hour-lbl" style="top:{{ m.top }}px;">{{ m.hour }}:00</span>
+            {% endfor %}
+          </div>
+
+          {# Day columns #}
+          <div class="cal-cols" id="cal-cols">
+            {% for col in day_cols %}
+            <div class="cal-day-col {% if col.date == today %}today{% endif %}" data-date="{{ col.date|date:'Y-m-d' }}">
+
+              {# Gray zones #}
+              {% for gz in col.gray_zones %}
+              <div class="cal-gray-zone" style="top:{{ gz.top }}px; height:{{ gz.height }}px;"></div>
+              {% endfor %}
+
+              {# Hour lines #}
+              {% for m in hour_markers %}
+              <div class="cal-hr-line {% if forloop.first or forloop.last %}bold{% endif %}"
+                   style="top:{{ m.top }}px;"></div>
+              {% endfor %}
+
+              {# Now line #}
+              {% if col.date == today %}<div class="cal-now-line" id="cal-now-line"></div>{% endif %}
+
+              {# Events #}
+              {% for ev in col.events %}
+              <a href="{% url 'ticket_detail' ev.entry.ticket_id %}"
+                 class="cal-evt {% if ev.kind == 'schedule' %}cal-evt-schedule{% else %}cal-evt-logged{% endif %}"
+                 style="top:{{ ev.top }}px; height:{{ ev.height }}px; left:calc({{ ev.left_pct }}% + 2px); width:calc({{ ev.width_pct }}% - 4px);"
+                 title="#{{ ev.entry.ticket_id }} {{ ev.entry.ticket.title }} — {{ ev.entry.start|date:'H:i' }}–{{ ev.entry.end|date:'H:i' }}">
+                <span class="cal-evt-title">#{{ ev.entry.ticket_id }} {{ ev.entry.ticket.title }}</span>
+                {% if ev.height > 28 %}
+                <span class="cal-evt-time">{{ ev.entry.start|date:"H:i" }}–{{ ev.entry.end|date:"H:i" }}</span>
+                {% endif %}
+              </a>
+              {% endfor %}
+
+            </div>
+            {% endfor %}
+          </div>
+
+        </div>
       </div>
     </div>
-  </div>
+    {% endif %}
 
-{% endif %}
+  </div>{# end left pane #}
 
-{% if scroll_to %}
-<script>
-document.addEventListener('DOMContentLoaded', function () {
-  var el = document.querySelector('.cal-scroll');
-  if (el) el.scrollTop = {{ scroll_to }};
-});
-</script>
-{% endif %}
+  {# ── RIGHT: CHAT ──────────────────────────────────────────────────────── #}
+  <div style="width:340px;flex-shrink:0;border-left:1px solid #e2e8f0;display:flex;flex-direction:column;background:#fff;">
+
+    <div style="padding:.6rem 1rem;border-bottom:1px solid #e2e8f0;font-weight:700;font-size:13px;flex-shrink:0;display:flex;align-items:center;justify-content:space-between;">
+      Chat
+      <button id="clear-chat-btn" class="btn btn-outline btn-sm" style="color:#b91c1c;border-color:#fca5a5;font-weight:400;">Clear</button>
+    </div>
+
+    <div class="chat-thread" id="chat-thread" style="flex:1;max-height:none;border:none;border-radius:0;padding:.75rem;">
+      {% for msg in chat_msgs %}
+      <div class="chat-msg">
+        <div class="chat-msg-meta">
+          <strong>{{ msg.sender.username }}</strong> &nbsp;·&nbsp; {{ msg.sent_at|date:"M d, H:i" }}
+        </div>
+        <div class="chat-msg-body">{{ msg.body }}</div>
+      </div>
+      {% empty %}
+      <p id="chat-empty" style="color:#94a3b8;font-size:13px;">No messages yet.</p>
+      {% endfor %}
+
+      <div class="chat-msg" id="chat-typing" style="display:none;">
+        <div class="chat-msg-meta"><strong>Agents</strong> &nbsp;·&nbsp; <em>thinking</em></div>
+        <div class="chat-typing-dots"><span></span><span></span><span></span></div>
+      </div>
+    </div>
+
+    <form id="chat-form" style="padding:.6rem;border-top:1px solid #e2e8f0;flex-shrink:0;">
+      {% csrf_token %}
+      <div class="chat-compose">
+        <input id="chat-input" type="text" name="body" placeholder="Type a message…" autocomplete="off">
+        <button type="submit" class="btn btn-primary">Send</button>
+      </div>
+    </form>
+
+  </div>{# end right pane #}
+
+</div>{# end two-pane #}
 
 <script>
 (function () {
-  var GRID_START = 7, PX_PER_HOUR = 64, GRID_HEIGHT = {{ grid_height|default:832 }};
+  /* ── constants ── */
+  var GRID_START  = 7;
+  var PX_PER_HOUR = 64;
+  var GRID_HEIGHT = {{ grid_height|default:832 }};
+
+  /* ── calendar scroll to work-start ── */
+  var calScroll = document.getElementById('cal-scroll');
+  if (calScroll) {
+    calScroll.scrollTop = {{ scroll_to|default:0 }};
+  }
+
+  /* ── now-line ── */
   function positionNowLine() {
     var line = document.getElementById('cal-now-line');
     if (!line) return;
@@ -141,7 +191,131 @@ document.addEventListener('DOMContentLoaded', function () {
     line.style.top = top + 'px';
   }
   positionNowLine();
-  setInterval(positionNowLine, 10 * 60 * 1000);
+  setInterval(positionNowLine, 60 * 1000);
+
+  /* ── calendar live-refresh ── */
+  {% if view_mode != 'agenda' %}
+  var fragUrl = location.pathname + location.search;
+  fragUrl += (fragUrl.indexOf('?') === -1 ? '?' : '&') + 'fragment=1';
+
+  function esc(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  function refreshCalendar() {
+    fetch(fragUrl, {credentials: 'same-origin'})
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        data.cols.forEach(function(col) {
+          var dayEl = document.querySelector('[data-date="' + col.date + '"]');
+          if (!dayEl) return;
+          dayEl.querySelectorAll('.cal-evt').forEach(function(el) { el.remove(); });
+          col.events.forEach(function(ev) {
+            var a = document.createElement('a');
+            a.href = '/tickets/' + ev.ticket_id + '/';
+            a.className = 'cal-evt ' + (ev.kind === 'schedule' ? 'cal-evt-schedule' : 'cal-evt-logged');
+            a.style.cssText = 'top:' + ev.top + 'px;height:' + ev.height + 'px;' +
+              'left:calc(' + ev.left_pct + '% + 2px);width:calc(' + ev.width_pct + '% - 4px);';
+            a.title = '#' + ev.ticket_id + ' ' + ev.title + ' — ' + ev.start + '–' + ev.end;
+            a.innerHTML = '<span class="cal-evt-title">#' + ev.ticket_id + ' ' + esc(ev.title) + '</span>';
+            if (ev.height > 28) {
+              a.innerHTML += '<span class="cal-evt-time">' + esc(ev.start) + '–' + esc(ev.end) + '</span>';
+            }
+            dayEl.appendChild(a);
+          });
+        });
+      })
+      .catch(function() {});
+  }
+  {% endif %}
+
+  /* ── chat polling ── */
+  var thread   = document.getElementById('chat-thread');
+  var typing   = document.getElementById('chat-typing');
+  var form     = document.getElementById('chat-form');
+  var input    = document.getElementById('chat-input');
+  var csrf     = form.querySelector('[name=csrfmiddlewaretoken]').value;
+  var lastId   = {{ last_message_id|default:0 }};
+  var pollUrl  = '{% url "chat_poll" %}';
+  var postUrl  = '{% url "chat_post" %}';
+  var wasTyping = false;
+
+  function appendMsg(msg) {
+    var empty = document.getElementById('chat-empty');
+    if (empty) empty.remove();
+    var div = document.createElement('div');
+    div.className = 'chat-msg';
+    div.innerHTML =
+      '<div class="chat-msg-meta"><strong>' + esc(msg.sender) + '</strong>' +
+      ' &nbsp;·&nbsp; ' + esc(msg.sent_at) + '</div>' +
+      '<div class="chat-msg-body">' + esc(msg.body) + '</div>';
+    thread.insertBefore(div, typing);
+  }
+
+  function poll() {
+    var params = '?since=' + lastId;
+    fetch(pollUrl + params, {credentials: 'same-origin'})
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        var hasAgentMsg = false;
+        if (data.messages) {
+          data.messages.forEach(function(m) {
+            appendMsg(m);
+            if (m.id > lastId) lastId = m.id;
+            if (m.sender.indexOf('agent_') === 0) hasAgentMsg = true;
+          });
+          if (data.messages.length) thread.scrollTop = thread.scrollHeight;
+        }
+        typing.style.display = data.typing ? '' : 'none';
+        if (data.typing) thread.scrollTop = thread.scrollHeight;
+        {% if view_mode != 'agenda' %}
+        /* refresh calendar when agent messages arrive or typing just finished */
+        if (hasAgentMsg || (wasTyping && !data.typing)) {
+          refreshCalendar();
+        }
+        {% endif %}
+        wasTyping = !!data.typing;
+      })
+      .catch(function() {});
+  }
+
+  form.addEventListener('submit', function(e) {
+    e.preventDefault();
+    var body = input.value.trim();
+    if (!body) return;
+    var fd = new FormData();
+    fd.append('csrfmiddlewaretoken', csrf);
+    fd.append('body', body);
+    input.value = '';
+    input.focus();
+    fetch(postUrl, {method:'POST', body:fd, credentials:'same-origin'})
+      .then(function() { poll(); })
+      .catch(function() {});
+  });
+
+  setInterval(poll, 2000);
+  thread.scrollTop = thread.scrollHeight;
+
+  var clearBtn = document.getElementById('clear-chat-btn');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', function () {
+      if (!confirm('Hide all current messages? They will no longer be visible or used by agents.')) return;
+      var fd = new FormData();
+      fd.append('csrfmiddlewaretoken', csrf);
+      fetch('{% url "chat_clear" %}', { method: 'POST', body: fd, credentials: 'same-origin' })
+        .then(function () {
+          thread.querySelectorAll('.chat-msg:not(#chat-typing)').forEach(function (el) { el.remove(); });
+          var p = document.createElement('p');
+          p.id = 'chat-empty';
+          p.style.cssText = 'color:#94a3b8;font-size:13px;';
+          p.textContent = 'No messages yet.';
+          thread.insertBefore(p, typing);
+          lastId = 0;
+        })
+        .catch(function () {});
+    });
+  }
 })();
 </script>
+
 {% endblock %}

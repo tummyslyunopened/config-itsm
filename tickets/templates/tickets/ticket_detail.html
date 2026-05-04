@@ -58,7 +58,7 @@
   <h2>Time entries</h2>
   {% if ticket.time_entries.all %}
     <table style="margin-bottom:1rem;">
-      <thead><tr><th>Engineer</th><th>Start</th><th>End</th><th>Notes</th></tr></thead>
+      <thead><tr><th>Engineer</th><th>Start</th><th>End</th><th>Notes</th>{% if user_role == 'engineer' %}<th></th>{% endif %}</tr></thead>
       <tbody>
         {% for e in ticket.time_entries.all %}
         <tr>
@@ -66,6 +66,18 @@
           <td style="white-space:nowrap;">{{ e.start|date:"Y-m-d H:i" }}</td>
           <td style="white-space:nowrap;">{{ e.end|date:"Y-m-d H:i" }}</td>
           <td>{{ e.notes }}</td>
+          {% if user_role == 'engineer' %}
+          <td style="width:1px;">
+            {% if e.engineer == request.user %}
+            <form method="post" style="margin:0;" onsubmit="return confirm('Delete this time entry?');">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="delete_time">
+              <input type="hidden" name="entry_pk" value="{{ e.pk }}">
+              <button type="submit" class="btn btn-sm" style="background:#fee2e2;color:#b91c1c;border:1px solid #fca5a5;">Delete</button>
+            </form>
+            {% endif %}
+          </td>
+          {% endif %}
         </tr>
         {% endfor %}
       </tbody>

@@ -1,0 +1,154 @@
+{% extends 'tickets/base.html' %}
+{% block title %}Chat — ITSM{% endblock %}
+{% block content %}
+
+<div style="display:flex;align-items:center;gap:1.5rem;margin-bottom:1.25rem;flex-wrap:wrap;">
+  <h1 style="margin:0;">Chat{% if engineer %} — {{ engineer.username }}{% endif %}</h1>
+
+  {% if user_role == 'ops' %}
+  <form method="get" style="display:flex;align-items:center;gap:.5rem;margin:0;">
+    <select name="engineer" onchange="this.form.submit()"
+            style="border:1px solid #d1d5db;border-radius:4px;padding:.3rem .5rem;font-size:13px;background:#fff;">
+      <option value="">— select engineer —</option>
+      {% for eng in engineers %}
+      <option value="{{ eng.pk }}" {% if eng == selected_engineer %}selected{% endif %}>{{ eng.username }}</option>
+      {% endfor %}
+    </select>
+  </form>
+  {% endif %}
+
+  {% if engineer %}
+  <button id="clear-chat-btn" class="btn btn-outline btn-sm" style="margin-left:auto;color:#b91c1c;border-color:#fca5a5;">Clear chat</button>
+  {% endif %}
+</div>
+
+{% if engineer %}
+
+  <div class="chat-thread" id="chat-thread">
+    {% for msg in messages %}
+    <div class="chat-msg">
+      <div class="chat-msg-meta">
+        <strong>{{ msg.sender.username }}</strong>
+        &nbsp;·&nbsp;{{ msg.sent_at|date:"M d, H:i" }}
+      </div>
+      <div class="chat-msg-body">{{ msg.body }}</div>
+    </div>
+    {% empty %}
+    <p id="chat-empty" style="color:#94a3b8;font-size:13px;">No messages yet.</p>
+    {% endfor %}
+
+    <div class="chat-msg" id="chat-typing" style="display:none;">
+      <div class="chat-msg-meta"><strong>Agents</strong> &nbsp;·&nbsp; <em>thinking</em></div>
+      <div class="chat-typing-dots"><span></span><span></span><span></span></div>
+    </div>
+  </div>
+
+  <form id="chat-form" class="card" style="padding:.75rem;">
+    {% csrf_token %}
+    {% if user_role == 'ops' %}
+    <input type="hidden" name="engineer_id" value="{{ engineer.pk }}">
+    {% endif %}
+    <div class="chat-compose">
+      <input id="chat-input" type="text" name="body" placeholder="Type a message…" autofocus autocomplete="off">
+      <button type="submit" class="btn btn-primary">Send</button>
+    </div>
+  </form>
+
+  <script>
+  (function () {
+    var thread  = document.getElementById('chat-thread');
+    var typing  = document.getElementById('chat-typing');
+    var form    = document.getElementById('chat-form');
+    var input   = document.getElementById('chat-input');
+    var csrf    = form.querySelector('[name=csrfmiddlewaretoken]').value;
+    var lastId  = {{ last_message_id|default:0 }};
+    var engId   = {% if selected_engineer %}'{{ selected_engineer.pk }}'{% else %}null{% endif %};
+    var pollUrl = '{% url "chat_poll" %}';
+    var postUrl = '{% url "chat_post" %}';
+
+    function esc(s) {
+      return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+    function appendMsg(msg) {
+      var empty = document.getElementById('chat-empty');
+      if (empty) empty.remove();
+
+      var div = document.createElement('div');
+      div.className = 'chat-msg';
+      div.innerHTML =
+        '<div class="chat-msg-meta"><strong>' + esc(msg.sender) + '</strong>' +
+        ' &nbsp;·&nbsp; ' + esc(msg.sent_at) + '</div>' +
+        '<div class="chat-msg-body">' + esc(msg.body) + '</div>';
+
+      // Insert before the typing indicator so it stays at the bottom
+      thread.insertBefore(div, typing);
+    }
+
+    function poll() {
+      var params = '?since=' + lastId + (engId ? '&engineer=' + engId : '');
+      fetch(pollUrl + params, { credentials: 'same-origin' })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          if (data.messages) {
+            data.messages.forEach(function (m) {
+              appendMsg(m);
+              if (m.id > lastId) lastId = m.id;
+            });
+            if (data.messages.length) thread.scrollTop = thread.scrollHeight;
+          }
+          typing.style.display = data.typing ? '' : 'none';
+          if (data.typing) thread.scrollTop = thread.scrollHeight;
+        })
+        .catch(function () {});
+    }
+
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      var body = input.value.trim();
+      if (!body) return;
+
+      var fd = new FormData();
+      fd.append('csrfmiddlewaretoken', csrf);
+      fd.append('body', body);
+      if (engId) fd.append('engineer_id', engId);
+
+      input.value = '';
+      input.focus();
+
+      fetch(postUrl, { method: 'POST', body: fd, credentials: 'same-origin' })
+        .then(function () { poll(); })
+        .catch(function () {});
+    });
+
+    setInterval(poll, 2000);
+    thread.scrollTop = thread.scrollHeight;
+
+    var clearBtn = document.getElementById('clear-chat-btn');
+    if (clearBtn) {
+      clearBtn.addEventListener('click', function () {
+        if (!confirm('Hide all current messages? They will no longer be visible or used by agents.')) return;
+        var fd = new FormData();
+        fd.append('csrfmiddlewaretoken', csrf);
+        if (engId) fd.append('engineer_id', engId);
+        fetch('{% url "chat_clear" %}', { method: 'POST', body: fd, credentials: 'same-origin' })
+          .then(function () {
+            thread.querySelectorAll('.chat-msg:not(#chat-typing)').forEach(function (el) { el.remove(); });
+            var p = document.createElement('p');
+            p.id = 'chat-empty';
+            p.style.cssText = 'color:#94a3b8;font-size:13px;';
+            p.textContent = 'No messages yet.';
+            thread.insertBefore(p, typing);
+            lastId = 0;
+          })
+          .catch(function () {});
+      });
+    }
+  })();
+  </script>
+
+{% elif user_role == 'ops' %}
+  <p style="color:#94a3b8;margin-top:2rem;text-align:center;">No engineers found.</p>
+{% endif %}
+
+{% endblock %}

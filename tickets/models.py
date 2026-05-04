@@ -1,3 +1,4 @@
+import secrets
 from django.db import models
 from django.contrib.auth.models import User
 
@@ -45,6 +46,11 @@ class ScheduleEntry(models.Model):
     engineer = models.ForeignKey(User, on_delete=models.CASCADE, related_name='schedule_entries')
     start = models.DateTimeField()
     end = models.DateTimeField()
+    created_by = models.ForeignKey(
+        'Agent', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='schedule_entries',
+    )
+    locked = models.BooleanField(default=True)
 
     class Meta:
         ordering = ['start']
@@ -98,3 +104,78 @@ class TimeEntry(models.Model):
 
     def __str__(self):
         return f'#{self.ticket_id} — {self.engineer.username} {self.start:%Y-%m-%d %H:%M}'
+
+
+class ChatMessage(models.Model):
+    engineer = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name='chat_messages',
+        limit_choices_to={'profile__role': 'engineer'},
+    )
+    sender = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sent_chat_messages')
+    body = models.TextField()
+    sent_at = models.DateTimeField(auto_now_add=True)
+    hidden = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ['sent_at']
+
+    def __str__(self):
+        return f'{self.sender.username} → {self.engineer.username} @ {self.sent_at:%Y-%m-%d %H:%M}'
+
+
+class ApiKey(models.Model):
+    user = models.ForeignKey(
+        User, on_delete=models.CASCADE,
+        limit_choices_to={'profile__role': 'ops'},
+        related_name='api_keys',
+    )
+    key = models.CharField(max_length=64, unique=True, default=secrets.token_urlsafe)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f'{self.user.username} — {self.key[:8]}…'
+
+
+class Agent(models.Model):
+    DELIBERATING = 'deliberating'
+    COMMITTED = 'committed'
+    STATUS_CHOICES = [(DELIBERATING, 'Deliberating'), (COMMITTED, 'Committed')]
+
+    engineer = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name='agents',
+        limit_choices_to={'profile__role': 'engineer'},
+    )
+    ops_user = models.OneToOneField(
+        User, on_delete=models.CASCADE, related_name='agent',
+        limit_choices_to={'profile__role': 'ops'},
+    )
+    name = models.CharField(max_length=100)
+    system_prompt = models.TextField()
+    priority = models.IntegerField()
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=DELIBERATING)
+    document = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['priority']
+        unique_together = [('engineer', 'priority')]
+
+    def __str__(self):
+        return f'{self.name} ({self.engineer.username})'
+
+
+class AgentMessage(models.Model):
+    USER = 'user'
+    AGENT = 'agent'
+    ROLE_CHOICES = [(USER, 'User'), (AGENT, 'Agent')]
+
+    agent = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name='messages')
+    role = models.CharField(max_length=10, choices=ROLE_CHOICES)
+    body = models.TextField()
+    sent_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['sent_at']
+
+    def __str__(self):
+        return f'{self.agent.name} / {self.role} @ {self.sent_at:%Y-%m-%d %H:%M}'

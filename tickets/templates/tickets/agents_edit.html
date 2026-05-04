@@ -1,0 +1,71 @@
+{% extends 'tickets/base.html' %}
+{% block title %}Edit {{ agent.name }} — ITSM{% endblock %}
+{% block content %}
+<h1>Edit Agent</h1>
+
+{% if error %}
+<div class="card" style="border-color:#fca5a5;background:#fff1f2;color:#b91c1c;margin-bottom:1rem;">
+  {{ error }}
+</div>
+{% endif %}
+
+<div class="card">
+  <form method="post" id="agent-form">
+    {% csrf_token %}
+    <label>Name</label>
+    <input type="text" name="name" id="agent-name" value="{{ agent.name }}" autofocus>
+
+    <label>Priority <span style="font-weight:400;color:#64748b;">(lower number = higher priority; must be unique among your agents)</span></label>
+    <input type="number" name="priority" value="{{ agent.priority }}" min="1">
+
+    <label>System Prompt</label>
+    <textarea name="system_prompt" id="system-prompt" rows="10">{{ agent.system_prompt }}</textarea>
+
+    <div style="margin-top:.75rem;border:1px solid #e2e8f0;border-radius:6px;padding:.75rem;background:#f8fafc;">
+      <label style="margin-top:0;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;">Regenerate prompt</label>
+      <textarea id="user-prompt" rows="3" placeholder="Describe what to change or add — e.g. 'add a 15-min morning standup block' or 'remove references to nutrition'" style="font-size:13px;margin-top:.35rem;"></textarea>
+      <div style="display:flex;align-items:center;gap:.5rem;margin-top:.5rem;">
+        <button type="button" id="suggest-btn" class="btn btn-outline btn-sm">Regenerate from name, current prompt &amp; instructions</button>
+        <span id="suggest-status" style="font-size:12px;color:#64748b;"></span>
+      </div>
+    </div>
+
+    <div style="margin-top:1.25rem;display:flex;gap:.5rem;">
+      <button type="submit" class="btn btn-primary">Save</button>
+      <a href="{% url 'agents_list' %}" class="btn btn-outline">Cancel</a>
+    </div>
+  </form>
+</div>
+
+<script>
+(function () {
+  var btn        = document.getElementById('suggest-btn');
+  var status     = document.getElementById('suggest-status');
+  var nameEl     = document.getElementById('agent-name');
+  var ta         = document.getElementById('system-prompt');
+  var userPrompt = document.getElementById('user-prompt');
+  var csrf       = document.querySelector('[name=csrfmiddlewaretoken]').value;
+  var url        = '{% url "agent_suggest_prompt" %}';
+
+  btn.addEventListener('click', function () {
+    var name = nameEl.value.trim();
+    if (!name) { status.textContent = 'Enter a name first.'; return; }
+    btn.disabled = true;
+    status.textContent = 'Generating…';
+    var fd = new FormData();
+    fd.append('csrfmiddlewaretoken', csrf);
+    fd.append('name', name);
+    fd.append('existing_prompt', ta.value);
+    fd.append('user_prompt', userPrompt.value);
+    fetch(url, { method: 'POST', body: fd, credentials: 'same-origin' })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data.prompt) { ta.value = data.prompt; status.textContent = 'Done — review and adjust before saving.'; }
+        else { status.textContent = data.error || 'Error generating prompt.'; }
+      })
+      .catch(function () { status.textContent = 'Request failed.'; })
+      .finally(function () { btn.disabled = false; });
+  });
+})();
+</script>
+{% endblock %}

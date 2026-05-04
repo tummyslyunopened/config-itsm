@@ -1,0 +1,42 @@
+{% extends 'tickets/base.html' %}
+{% block title %}My Agents — ITSM{% endblock %}
+{% block content %}
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.25rem;">
+  <h1 style="margin-bottom:0;">My Agents</h1>
+  <a href="{% url 'agent_create' %}" class="btn btn-primary">+ Create Agent</a>
+</div>
+
+{% if agents %}
+<table>
+  <thead>
+    <tr>
+      <th>Priority</th>
+      <th>Name</th>
+      <th>Status</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for agent in agents %}
+    <tr>
+      <td>{{ agent.priority }}</td>
+      <td><a href="{% url 'agent_chat' agent.pk %}">{{ agent.name }}</a></td>
+      <td>
+        <span class="badge {% if agent.status == 'committed' %}badge-complete{% else %}badge-in_progress{% endif %}">
+          {{ agent.status }}
+        </span>
+      </td>
+      <td style="white-space:nowrap;">
+        <a href="{% url 'agent_chat' agent.pk %}" class="btn btn-sm btn-outline">Chat</a>
+        <a href="{% url 'agent_edit' agent.pk %}" class="btn btn-sm btn-outline" style="margin-left:.25rem;">Edit</a>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="card" style="color:#64748b;text-align:center;padding:2rem;">
+  No agents yet. <a href="{% url 'agent_create' %}">Create your first agent.</a>
+</div>
+{% endif %}
+{% endblock %}

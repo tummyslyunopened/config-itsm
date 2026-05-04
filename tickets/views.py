@@ -1,9 +1,25 @@
+import anthropic
+import threading
 from datetime import date, timedelta
 from django.contrib.auth.models import User
+from django.db import connection
 from django.shortcuts import render, get_object_or_404, redirect
 from django.contrib.auth.decorators import login_required
-from django.http import HttpResponseForbidden
-from .models import Ticket, ScheduleEntry, TimeEntry, WorkSchedule, DAY_KEYS
+from django.http import HttpResponseForbidden, JsonResponse
+from .models import Agent, AgentMessage, ApiKey, Ticket, ScheduleEntry, TimeEntry, WorkSchedule, ChatMessage, DAY_KEYS, DAY_LABELS, UserProfile
+
+
+def _trigger_agents(engineer_id, message):
+    """Fire on_message in a background thread so the chat POST returns immediately."""
+    def _run():
+        try:
+            from agents.runner import on_message
+            on_message(engineer_id, message)
+        except Exception:
+            pass
+        finally:
+            connection.close()
+    threading.Thread(target=_run, daemon=True).start()
 from .forms import (
     TicketCreateForm, TicketStatusForm, ScheduleEntryForm,
     TimeEntryForm, WorkScheduleForm,
@@ -222,6 +238,10 @@ def ticket_detail(request, pk):
                     end=time_form.get_end(),
                 )
                 return redirect('ticket_detail', pk=pk)
+        elif action == 'delete_time' and user_role == 'engineer':
+            entry_pk = request.POST.get('entry_pk')
+            TimeEntry.objects.filter(pk=entry_pk, engineer=request.user, ticket=ticket).delete()
+            return redirect('ticket_detail', pk=pk)
 
     if status_form is None:
         status_form = TicketStatusForm(instance=ticket)
@@ -282,6 +302,7 @@ def schedule_entry_add(request, pk):
             ScheduleEntry.objects.create(
                 ticket=ticket, engineer=engineer,
                 start=entry_start, end=entry_end,
+                created_by=None, locked=True,
             )
             if ticket.status != Ticket.SCHEDULED:
                 ticket.status = Ticket.SCHEDULED
@@ -324,8 +345,20 @@ def calendar_view(request):
             [{'kind': 'time',     'entry': e} for e in time_entries],
             key=lambda x: x['entry'].start,
         )
+        chat_msgs = (
+            ChatMessage.objects
+            .filter(engineer=request.user, hidden=False)
+            .select_related('sender')
+            .order_by('sent_at')
+        )
         return render(request, 'tickets/calendar.html', {
-            'view_mode': view_mode, 'agenda_entries': agenda, 'today': today,
+            'view_mode': view_mode,
+            'agenda_entries': agenda,
+            'today': today,
+            'chat_msgs': chat_msgs,
+            'last_message_id': chat_msgs.values_list('id', flat=True).last() or 0,
+            'scroll_to': 0,
+            'grid_height': GRID_HEIGHT,
         })
 
     if view_mode == 'day':
@@ -369,6 +402,39 @@ def calendar_view(request):
 
     day_cols = _build_day_cols(week_days, sched_by_day, time_by_day, get_work_hours)
 
+    # Fragment JSON — calendar polls this to refresh events without a page reload
+    if request.GET.get('fragment') == '1':
+        return JsonResponse({
+            'cols': [
+                {
+                    'date': col['date'].isoformat(),
+                    'events': [
+                        {
+                            'kind': ev['kind'],
+                            'ticket_id': ev['entry'].ticket_id,
+                            'title': ev['entry'].ticket.title,
+                            'start': ev['entry'].start.strftime('%H:%M'),
+                            'end': ev['entry'].end.strftime('%H:%M'),
+                            'top': ev['top'],
+                            'height': ev['height'],
+                            'left_pct': ev['left_pct'],
+                            'width_pct': ev['width_pct'],
+                        }
+                        for ev in col['events']
+                    ],
+                }
+                for col in day_cols
+            ]
+        })
+
+    chat_msgs = (
+        ChatMessage.objects
+        .filter(engineer=request.user)
+        .select_related('sender')
+        .order_by('sent_at')
+    )
+    last_message_id = chat_msgs.values_list('id', flat=True).last() or 0
+
     return render(request, 'tickets/calendar.html', {
         'view_mode': view_mode,
         'day_cols': day_cols,
@@ -379,6 +445,8 @@ def calendar_view(request):
         'prev_nav': prev_nav,
         'next_nav': next_nav,
         'today': today,
+        'chat_msgs': chat_msgs,
+        'last_message_id': last_message_id,
     })
 
 
@@ -481,3 +549,340 @@ def work_schedule_view(request):
         })
 
     return render(request, 'tickets/work_schedule.html', {'form': form, 'day_rows': day_rows})
+
+
+@login_required
+def chat_view(request):
+    from django.urls import reverse
+    user_role = role(request)
+    engineers = User.objects.filter(profile__role='engineer').order_by('username')
+
+    if user_role == 'engineer':
+        engineer = request.user
+        if request.method == 'POST':
+            body = request.POST.get('body', '').strip()
+            if body:
+                ChatMessage.objects.create(engineer=engineer, sender=request.user, body=body)
+                _trigger_agents(engineer.id, body)
+            return redirect('chat')
+        messages = ChatMessage.objects.filter(engineer=engineer, hidden=False).select_related('sender')
+        last_message_id = messages.values_list('id', flat=True).last() or 0
+        return render(request, 'tickets/chat.html', {
+            'messages': messages,
+            'engineer': engineer,
+            'user_role': user_role,
+            'last_message_id': last_message_id,
+        })
+
+    if user_role == 'ops':
+        eng_id = request.GET.get('engineer') or request.POST.get('engineer_id')
+        if not eng_id and engineers.exists():
+            eng_id = str(engineers.first().pk)
+
+        selected_engineer = None
+        if eng_id:
+            try:
+                selected_engineer = engineers.get(pk=eng_id)
+            except User.DoesNotExist:
+                pass
+
+        if request.method == 'POST':
+            body = request.POST.get('body', '').strip()
+            if body and selected_engineer:
+                ChatMessage.objects.create(
+                    engineer=selected_engineer, sender=request.user, body=body,
+                )
+            dest = reverse('chat')
+            if selected_engineer:
+                dest += f'?engineer={selected_engineer.pk}'
+            return redirect(dest)
+
+        messages_qs = (
+            ChatMessage.objects.filter(engineer=selected_engineer, hidden=False).select_related('sender')
+            if selected_engineer else ChatMessage.objects.none()
+        )
+        last_message_id = messages_qs.values_list('id', flat=True).last() or 0
+        return render(request, 'tickets/chat.html', {
+            'messages': messages_qs,
+            'engineer': selected_engineer,
+            'engineers': engineers,
+            'selected_engineer': selected_engineer,
+            'eng_id': eng_id or '',
+            'user_role': user_role,
+            'last_message_id': last_message_id,
+        })
+
+    return HttpResponseForbidden()
+
+
+@login_required
+def chat_poll(request):
+    """Return new messages since `?since=<id>` and whether any agents are typing."""
+    user_role = role(request)
+    try:
+        since_id = int(request.GET.get('since', 0))
+    except (ValueError, TypeError):
+        since_id = 0
+
+    if user_role == 'engineer':
+        engineer = request.user
+    elif user_role == 'ops':
+        eng_id = request.GET.get('engineer')
+        if not eng_id:
+            return JsonResponse({'messages': [], 'typing': False})
+        try:
+            engineer = User.objects.get(pk=eng_id, profile__role='engineer')
+        except User.DoesNotExist:
+            return JsonResponse({'error': 'not found'}, status=404)
+    else:
+        return JsonResponse({'error': 'forbidden'}, status=403)
+
+    new_msgs = (
+        ChatMessage.objects
+        .filter(engineer=engineer, id__gt=since_id, hidden=False)
+        .select_related('sender')
+        .order_by('sent_at')
+    )
+    typing = Agent.objects.filter(engineer=engineer, status=Agent.DELIBERATING).exists()
+
+    return JsonResponse({
+        'messages': [
+            {
+                'id': m.id,
+                'sender': m.sender.username,
+                'body': m.body,
+                'sent_at': m.sent_at.strftime('%b %d, %H:%M'),
+            }
+            for m in new_msgs
+        ],
+        'typing': typing,
+    })
+
+
+@login_required
+def chat_post(request):
+    """Post a chat message via AJAX; returns JSON."""
+    if request.method != 'POST':
+        return JsonResponse({'error': 'method not allowed'}, status=405)
+    user_role = role(request)
+    body = request.POST.get('body', '').strip()
+    if not body:
+        return JsonResponse({'error': 'body required'}, status=400)
+
+    if user_role == 'engineer':
+        engineer = request.user
+        msg = ChatMessage.objects.create(engineer=engineer, sender=request.user, body=body)
+        _trigger_agents(engineer.id, body)
+    elif user_role == 'ops':
+        try:
+            engineer = User.objects.get(
+                pk=int(request.POST.get('engineer_id', 0)),
+                profile__role='engineer',
+            )
+        except (User.DoesNotExist, ValueError, TypeError):
+            return JsonResponse({'error': 'engineer not found'}, status=404)
+        msg = ChatMessage.objects.create(engineer=engineer, sender=request.user, body=body)
+    else:
+        return JsonResponse({'error': 'forbidden'}, status=403)
+
+    return JsonResponse({'ok': True, 'id': msg.id})
+
+
+@login_required
+def chat_clear(request):
+    """POST — mark all visible messages for the engineer as hidden."""
+    if request.method != 'POST':
+        return JsonResponse({'error': 'method not allowed'}, status=405)
+    user_role = role(request)
+    if user_role == 'engineer':
+        engineer = request.user
+    elif user_role == 'ops':
+        try:
+            engineer = User.objects.get(
+                pk=int(request.POST.get('engineer_id', 0)),
+                profile__role='engineer',
+            )
+        except (User.DoesNotExist, ValueError, TypeError):
+            return JsonResponse({'error': 'engineer not found'}, status=404)
+    else:
+        return JsonResponse({'error': 'forbidden'}, status=403)
+
+    ChatMessage.objects.filter(engineer=engineer, hidden=False).update(hidden=True)
+    return JsonResponse({'ok': True})
+
+
+# ── Agent views (engineer only) ───────────────────────────────────────────────
+
+import re
+import secrets as _secrets
+
+
+def _provision_agent_ops_user(name):
+    """Create a dedicated ops User + UserProfile + ApiKey for a new agent."""
+    slug = re.sub(r'[^a-z0-9]', '_', name.lower())[:20].strip('_')
+    suffix = _secrets.token_hex(4)
+    username = f'agent_{slug}_{suffix}'
+    ops_user = User.objects.create_user(username=username)
+    ops_user.set_unusable_password()
+    ops_user.save()
+    UserProfile.objects.create(user=ops_user, role='ops')
+    ApiKey.objects.create(user=ops_user)
+    return ops_user
+
+
+@require_role('engineer')
+def agent_list(request):
+    agents = Agent.objects.filter(engineer=request.user).order_by('priority')
+    return render(request, 'tickets/agents_list.html', {'agents': agents})
+
+
+@require_role('engineer')
+def agent_create(request):
+    error = None
+    if request.method == 'POST':
+        name = request.POST.get('name', '').strip()
+        system_prompt = request.POST.get('system_prompt', '').strip()
+        priority_raw = request.POST.get('priority', '').strip()
+
+        if not name:
+            error = 'Name is required.'
+        elif not system_prompt:
+            error = 'System prompt is required.'
+        elif not priority_raw.isdigit():
+            error = 'Priority must be a positive integer.'
+        elif Agent.objects.filter(engineer=request.user, priority=int(priority_raw)).exists():
+            error = f'You already have an agent with priority {priority_raw}.'
+        else:
+            ops_user = _provision_agent_ops_user(name)
+            Agent.objects.create(
+                engineer=request.user,
+                ops_user=ops_user,
+                name=name,
+                system_prompt=system_prompt,
+                priority=int(priority_raw),
+            )
+            return redirect('agents_list')
+
+    return render(request, 'tickets/agents_create.html', {'error': error})
+
+
+@require_role('engineer')
+def agent_chat(request, pk):
+    agent = get_object_or_404(Agent, pk=pk, engineer=request.user)
+
+    if request.method == 'POST':
+        action = request.POST.get('action')
+
+        if action == 'commit':
+            from agents.base import GenericAgent
+            GenericAgent(agent).commit_chat_to_document()
+            return redirect('agent_chat', pk=pk)
+
+        body = request.POST.get('body', '').strip()
+        if body:
+            AgentMessage.objects.create(agent=agent, role=AgentMessage.USER, body=body)
+        return redirect('agent_chat', pk=pk)
+
+    messages = agent.messages.all()
+    return render(request, 'tickets/agents_chat.html', {
+        'agent': agent,
+        'messages': messages,
+    })
+
+
+@require_role('engineer')
+def agent_edit(request, pk):
+    agent = get_object_or_404(Agent, pk=pk, engineer=request.user)
+    error = None
+
+    if request.method == 'POST':
+        name = request.POST.get('name', '').strip()
+        system_prompt = request.POST.get('system_prompt', '').strip()
+        priority_raw = request.POST.get('priority', '').strip()
+
+        if not name:
+            error = 'Name is required.'
+        elif not system_prompt:
+            error = 'System prompt is required.'
+        elif not priority_raw.isdigit():
+            error = 'Priority must be a positive integer.'
+        elif (
+            Agent.objects
+            .filter(engineer=request.user, priority=int(priority_raw))
+            .exclude(pk=agent.pk)
+            .exists()
+        ):
+            error = f'You already have an agent with priority {priority_raw}.'
+        else:
+            agent.name = name
+            agent.system_prompt = system_prompt
+            agent.priority = int(priority_raw)
+            agent.save()
+            return redirect('agents_list')
+
+    return render(request, 'tickets/agents_edit.html', {'agent': agent, 'error': error})
+
+
+@require_role('engineer')
+def agent_suggest_prompt(request):
+    """POST {name} → JSON {prompt}. Uses Claude to draft a system prompt for the agent."""
+    if request.method != 'POST':
+        return JsonResponse({'error': 'method not allowed'}, status=405)
+    name = request.POST.get('name', '').strip()
+    if not name:
+        return JsonResponse({'error': 'name required'}, status=400)
+
+    existing_prompt = request.POST.get('existing_prompt', '').strip()
+    user_prompt = request.POST.get('user_prompt', '').strip()
+
+    # Build a human-readable work schedule for the engineer
+    try:
+        ws = WorkSchedule.objects.get(engineer=request.user)
+        hours_lines = []
+        for key, label in zip(DAY_KEYS, DAY_LABELS):
+            start = getattr(ws, f'{key}_start')
+            end = getattr(ws, f'{key}_end')
+            if start and end:
+                hours_lines.append(f"  {label}: {start:%H:%M}–{end:%H:%M}")
+            else:
+                hours_lines.append(f"  {label}: not working")
+        work_hours_text = '\n'.join(hours_lines)
+    except WorkSchedule.DoesNotExist:
+        work_hours_text = '  (not configured)'
+
+    import os
+    client = anthropic.Anthropic(api_key=os.environ.get('ANTHROPIC_API_KEY') or None)
+
+    existing_section = f"""
+EXISTING SYSTEM PROMPT (rewrite or refine this — do not copy it verbatim unless it is already good):
+{existing_prompt}
+""" if existing_prompt else ''
+
+    instructions_section = f"""
+SPECIFIC INSTRUCTIONS FROM THE USER (follow these closely):
+{user_prompt}
+""" if user_prompt else ''
+
+    meta = f"""Rewrite the system prompt for an AI scheduling assistant named "{name}".
+
+Context: this agent runs inside a multi-agent ITSM calendar system. Several agents (each with a different domain) collaborate to fill an engineer's workday with scheduled blocks. Each agent has an integer priority; lower = higher priority. Higher-priority agents claim time slots first; lower-priority ones must work around them.
+
+ENGINEER'S WORKING HOURS:
+{work_hours_text}
+{existing_section}{instructions_section}
+The system prompt you produce must:
+1. Clearly state the agent's domain (what kinds of activities it schedules and why they matter).
+2. Give 3–5 concrete example activity titles this agent would create, with realistic times drawn from the engineer's actual working hours above.
+3. Specify sensible default durations (e.g. "30-minute", "1-hour").
+4. Explicitly reference the engineer's working days and hours so the agent knows when it can schedule.
+5. Tell the agent to move its own blocks rather than overlap a higher-priority agent's blocks.
+6. Be specific and decisive — no vague placeholders.
+
+Write only the system prompt itself (150–250 words). No title, no preamble."""
+
+    response = client.messages.create(
+        model='claude-sonnet-4-6',
+        max_tokens=500,
+        messages=[{'role': 'user', 'content': meta}],
+    )
+    return JsonResponse({'prompt': response.content[0].text.strip()})

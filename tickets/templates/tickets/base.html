@@ -101,6 +101,20 @@
     .ticket-card.dragging { opacity: .4; }
     .ticket-card .tc-num { font-size: 11px; font-weight: 700; color: #64748b; margin-bottom: 3px; }
     .ticket-card .tc-note { font-size: 12px; color: #374151; line-height: 1.4; }
+
+    /* chat */
+    .chat-thread { background: #fff; border: 1px solid #e2e8f0; border-radius: 6px; overflow-y: auto; max-height: 520px; padding: .75rem; margin-bottom: 1rem; display: flex; flex-direction: column; gap: .65rem; }
+    .chat-msg { padding: .5rem .65rem; border-radius: 4px; background: #f8fafc; border: 1px solid #f1f5f9; }
+    .chat-msg-meta { font-size: 11px; color: #64748b; margin-bottom: 3px; }
+    .chat-msg-meta strong { color: #374151; }
+    .chat-msg-body { font-size: 13px; line-height: 1.5; white-space: pre-wrap; }
+    .chat-compose { display: flex; gap: .5rem; }
+    .chat-compose input { flex: 1; }
+    .chat-typing-dots { display: flex; gap: 5px; align-items: center; padding: 2px 0; }
+    .chat-typing-dots span { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #94a3b8; animation: chat-dot 1.2s infinite ease-in-out; }
+    .chat-typing-dots span:nth-child(2) { animation-delay: .2s; }
+    .chat-typing-dots span:nth-child(3) { animation-delay: .4s; }
+    @keyframes chat-dot { 0%,80%,100% { transform:scale(.6); opacity:.3; } 40% { transform:scale(1); opacity:1; } }
   </style>
 </head>
 <body>
@@ -109,8 +123,9 @@
   <a href="{% url 'ticket_list' %}">Tickets</a>
   {% if user.is_authenticated %}
     {% with r=user.profile.role %}
-      {% if r == 'engineer' %}<a href="{% url 'calendar' %}">Calendar</a><a href="{% url 'work_schedule' %}">My Hours</a>{% endif %}
+      {% if r == 'engineer' %}<a href="{% url 'calendar' %}">Calendar</a><a href="{% url 'work_schedule' %}">My Hours</a><a href="{% url 'agents_list' %}">Agents</a>{% endif %}
       {% if r == 'ops' %}<a href="{% url 'queue' %}">Queue</a>{% endif %}
+      <a href="{% url 'chat' %}">Chat</a>
     {% endwith %}
   {% endif %}
   <span class="spacer"></span>

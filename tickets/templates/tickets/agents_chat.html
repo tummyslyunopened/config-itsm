@@ -1,0 +1,53 @@
+{% extends 'tickets/base.html' %}
+{% block title %}{{ agent.name }} — ITSM{% endblock %}
+{% block content %}
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.25rem;">
+  <div>
+    <h1 style="margin-bottom:.1rem;">{{ agent.name }}</h1>
+    <span style="font-size:12px;color:#64748b;">Priority {{ agent.priority }} &middot;
+      <span class="badge {% if agent.status == 'committed' %}badge-complete{% else %}badge-in_progress{% endif %}">{{ agent.status }}</span>
+    </span>
+  </div>
+  <div style="display:flex;gap:.5rem;align-items:center;">
+    <a href="{% url 'agent_edit' agent.pk %}" class="btn btn-sm btn-outline">Edit</a>
+    <a href="{% url 'agents_list' %}" class="btn btn-sm btn-outline">← Agents</a>
+  </div>
+</div>
+
+<div class="chat-thread" id="chat-thread">
+  {% for msg in messages %}
+  <div class="chat-msg">
+    <div class="chat-msg-meta">
+      <strong>{% if msg.role == 'user' %}You{% else %}{{ agent.name }}{% endif %}</strong>
+      &middot; {{ msg.sent_at|date:"M j, H:i" }}
+    </div>
+    <div class="chat-msg-body">{{ msg.body }}</div>
+  </div>
+  {% empty %}
+  <div style="color:#94a3b8;font-size:13px;text-align:center;padding:1rem;">
+    No messages yet. Start a conversation to update this agent's priorities.
+  </div>
+  {% endfor %}
+</div>
+
+<form method="post" class="chat-compose" style="margin-bottom:1rem;">
+  {% csrf_token %}
+  <input type="hidden" name="action" value="message">
+  <input type="text" name="body" placeholder="Message {{ agent.name }}…" autofocus autocomplete="off">
+  <button type="submit" class="btn btn-primary">Send</button>
+</form>
+
+<form method="post">
+  {% csrf_token %}
+  <input type="hidden" name="action" value="commit">
+  <button type="submit" class="btn btn-outline btn-sm">Commit to State</button>
+  <span style="font-size:12px;color:#94a3b8;margin-left:.5rem;">
+    Asks the agent to read this conversation and rewrite its private state document.
+  </span>
+</form>
+
+<script>
+  const thread = document.getElementById('chat-thread');
+  if (thread) thread.scrollTop = thread.scrollHeight;
+</script>
+{% endblock %}
