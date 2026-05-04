@@ -14,6 +14,7 @@ urlpatterns = [
     path('chat/poll/', views.chat_poll, name='chat_poll'),
     path('chat/post/', views.chat_post, name='chat_post'),
     path('chat/clear/', views.chat_clear, name='chat_clear'),
+    path('chat/stop-agents/', views.agents_stop, name='agents_stop'),
 
     path('agents/', views.agent_list, name='agents_list'),
     path('agents/create/', views.agent_create, name='agent_create'),

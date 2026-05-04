@@ -134,7 +134,10 @@
 
     <div style="padding:.6rem 1rem;border-bottom:1px solid #e2e8f0;font-weight:700;font-size:13px;flex-shrink:0;display:flex;align-items:center;justify-content:space-between;">
       Chat
-      <button id="clear-chat-btn" class="btn btn-outline btn-sm" style="color:#b91c1c;border-color:#fca5a5;font-weight:400;">Clear</button>
+      <div style="display:flex;gap:.5rem;">
+        <button id="stop-agents-btn" class="btn btn-outline btn-sm" style="color:#b45309;border-color:#fcd34d;font-weight:400;display:none;">Stop agents</button>
+        <button id="clear-chat-btn" class="btn btn-outline btn-sm" style="color:#b91c1c;border-color:#fca5a5;font-weight:400;">Clear</button>
+      </div>
     </div>
 
     <div class="chat-thread" id="chat-thread" style="flex:1;max-height:none;border:none;border-radius:0;padding:.75rem;">
@@ -267,6 +270,7 @@
           if (data.messages.length) thread.scrollTop = thread.scrollHeight;
         }
         typing.style.display = data.typing ? '' : 'none';
+        updateStopBtn(data.typing);
         if (data.typing) thread.scrollTop = thread.scrollHeight;
         {% if view_mode != 'agenda' %}
         /* refresh calendar when agent messages arrive or typing just finished */
@@ -314,6 +318,21 @@
         })
         .catch(function () {});
     });
+  }
+
+  var stopBtn = document.getElementById('stop-agents-btn');
+  if (stopBtn) {
+    stopBtn.addEventListener('click', function () {
+      var fd = new FormData();
+      fd.append('csrfmiddlewaretoken', csrf);
+      fetch('{% url "agents_stop" %}', { method: 'POST', body: fd, credentials: 'same-origin' })
+        .then(function () { poll(); })
+        .catch(function () {});
+    });
+  }
+
+  function updateStopBtn(isTyping) {
+    if (stopBtn) stopBtn.style.display = isTyping ? '' : 'none';
   }
 })();
 </script>

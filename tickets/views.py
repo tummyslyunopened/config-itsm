@@ -429,7 +429,7 @@ def calendar_view(request):
 
     chat_msgs = (
         ChatMessage.objects
-        .filter(engineer=request.user)
+        .filter(engineer=request.user, hidden=False)
         .select_related('sender')
         .order_by('sent_at')
     )
@@ -708,6 +708,29 @@ def chat_clear(request):
         return JsonResponse({'error': 'forbidden'}, status=403)
 
     ChatMessage.objects.filter(engineer=engineer, hidden=False).update(hidden=True)
+    return JsonResponse({'ok': True})
+
+
+@login_required
+def agents_stop(request):
+    """POST — mark all deliberating agents for the engineer as committed."""
+    if request.method != 'POST':
+        return JsonResponse({'error': 'method not allowed'}, status=405)
+    user_role = role(request)
+    if user_role == 'engineer':
+        engineer = request.user
+    elif user_role == 'ops':
+        try:
+            engineer = User.objects.get(
+                pk=int(request.POST.get('engineer_id', 0)),
+                profile__role='engineer',
+            )
+        except (User.DoesNotExist, ValueError, TypeError):
+            return JsonResponse({'error': 'engineer not found'}, status=404)
+    else:
+        return JsonResponse({'error': 'forbidden'}, status=403)
+
+    Agent.objects.filter(engineer=engineer, status=Agent.DELIBERATING).update(status=Agent.COMMITTED)
     return JsonResponse({'ok': True})
 
 

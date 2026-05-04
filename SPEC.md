@@ -233,7 +233,6 @@ Each engineer has their own set of personal agents. The scheduling cycle is run 
 The message trigger includes two additional pre-cycle steps: removal detection and relevance filtering.
 
 ```
-TRIGGER: 4am daily  — fires for every engineer who has working hours that day
 TRIGGER: new chat   — fires for the engineer whose group chat received the message
 
 ═══════════════════════════════════════════════════════
@@ -354,16 +353,10 @@ agents/
                          _run_cycle(engineer_id, for_date, agents)
                            — reset → propose → resolve → commit →
                              conflict cleanup for one date
-                         standup(engineer_id, for_date)
                          on_message(engineer_id, message)
                            — broadcast check → relevance/removal
                              check → _run_cycle per date
-                         run_morning()
-                           — fires standup() for all engineers with
-                             working hours today
 ```
-
-`run_morning()` is invoked by a management command (`python manage.py run_morning_standup`) scheduled via cron at 04:00 daily.
 
 ---
 
@@ -384,6 +377,7 @@ agents/
 | `/chat/poll/`                 | All      | JSON polling endpoint — returns new messages and typing status    |
 | `/chat/post/`                 | All      | JSON POST endpoint — saves a message and triggers agents          |
 | `/chat/clear/`                | All      | POST — marks all visible messages as hidden                       |
+| `/chat/stop-agents/`          | All      | POST — marks all the engineer's deliberating agents as committed  |
 | `/agents/`                    | Engineer | List the engineer's own agents                                    |
 | `/agents/create/`             | Engineer | Create a new agent                                                |
 | `/agents/suggest-prompt/`     | Engineer | POST `{name, existing_prompt, user_prompt}` → JSON `{prompt}`; generates a system prompt via Claude using the agent name, current prompt, user instructions, and engineer's work schedule |
@@ -473,6 +467,12 @@ All `start` and `end` time fields across schedule entries, time entries, and wor
 - Each message displays: sender username, timestamp, and body.
 - The page polls `/chat/poll/` every 2 seconds to append new messages and update the typing indicator without a reload.
 - A **Clear chat** button marks all currently-visible messages as `hidden=True`. Hidden messages disappear from the UI immediately and are excluded from all future agent queries and chat polls.
+- A **Stop agents** button appears while any agent is deliberating. Clicking it sends a POST to `/chat/stop-agents/` which sets all the engineer's `deliberating` agents to `committed`, immediately hiding the typing indicator.
+
+### Chat Stop Agents — `/chat/stop-agents/`
+- POST `{[engineer_id]}`. Sets `status = committed` on all `deliberating` agents belonging to the engineer.
+- Engineer role uses `request.user` as the engineer. Ops role requires `engineer_id` in the POST body.
+- Returns `{ok: true}`.
 
 ### Chat Poll — `/chat/poll/`
 - GET. Returns `{messages: [...], typing: bool}`.

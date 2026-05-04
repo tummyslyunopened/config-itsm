@@ -18,7 +18,8 @@
   {% endif %}
 
   {% if engineer %}
-  <button id="clear-chat-btn" class="btn btn-outline btn-sm" style="margin-left:auto;color:#b91c1c;border-color:#fca5a5;">Clear chat</button>
+  <button id="stop-agents-btn" class="btn btn-outline btn-sm" style="margin-left:auto;color:#b45309;border-color:#fcd34d;display:none;">Stop agents</button>
+  <button id="clear-chat-btn" class="btn btn-outline btn-sm" style="color:#b91c1c;border-color:#fca5a5;">Clear chat</button>
   {% endif %}
 </div>
 
@@ -98,6 +99,7 @@
             if (data.messages.length) thread.scrollTop = thread.scrollHeight;
           }
           typing.style.display = data.typing ? '' : 'none';
+          updateStopBtn(data.typing);
           if (data.typing) thread.scrollTop = thread.scrollHeight;
         })
         .catch(function () {});
@@ -143,6 +145,22 @@
           })
           .catch(function () {});
       });
+    }
+
+    var stopBtn = document.getElementById('stop-agents-btn');
+    if (stopBtn) {
+      stopBtn.addEventListener('click', function () {
+        var fd = new FormData();
+        fd.append('csrfmiddlewaretoken', csrf);
+        if (engId) fd.append('engineer_id', engId);
+        fetch('{% url "agents_stop" %}', { method: 'POST', body: fd, credentials: 'same-origin' })
+          .then(function () { poll(); })
+          .catch(function () {});
+      });
+    }
+
+    function updateStopBtn(isTyping) {
+      if (stopBtn) stopBtn.style.display = isTyping ? '' : 'none';
     }
   })();
   </script>

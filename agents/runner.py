@@ -2,8 +2,6 @@ import logging
 import re
 from datetime import date, timedelta
 
-from django.contrib.auth.models import User
-
 from tickets.models import Agent
 from .base import GenericAgent
 
@@ -103,18 +101,6 @@ def _build_agents_for_engineer(engineer_id):
     return result
 
 
-def standup(engineer_id, for_date=None):
-    if for_date is None:
-        for_date = date.today()
-
-    agents = _build_agents_for_engineer(engineer_id)
-    if not agents:
-        return
-
-    _run_cycle(engineer_id, for_date, agents)
-    logger.info(f'Standup complete: engineer {engineer_id} / {for_date}')
-
-
 def on_message(engineer_id, message):
     """Triggered when an engineer posts a new chat message."""
     for_dates = _parse_target_dates(message)
@@ -156,18 +142,3 @@ def on_message(engineer_id, message):
             _run_cycle(engineer_id, for_date, to_schedule)
 
 
-def run_morning():
-    """Fire standup() for every engineer who has working hours today. Called by cron at 04:00."""
-    today = date.today()
-    engineers = User.objects.filter(profile__role='engineer')
-    for eng in engineers:
-        ws = getattr(eng, 'work_schedule', None)
-        if ws is None:
-            continue
-        work_start, _ = ws.hours_for_date(today)
-        if work_start is None:
-            continue
-        try:
-            standup(eng.id, today)
-        except Exception:
-            logger.exception(f'Standup failed for engineer {eng.id}')
