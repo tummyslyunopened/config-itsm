@@ -6,6 +6,7 @@
   <a href="{% url 'ticket_create' %}" class="btn btn-primary">New ticket</a>
 </div>
 {% if tickets %}
+<div class="table-scroll">
 <table>
   <thead>
     <tr>
@@ -26,6 +27,7 @@
     {% endfor %}
   </tbody>
 </table>
+</div>
 {% else %}
 <p style="color:#64748b;">No tickets yet.</p>
 {% endif %}

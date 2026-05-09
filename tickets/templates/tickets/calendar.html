@@ -2,10 +2,10 @@
 {% block title %}Calendar — ITSM{% endblock %}
 
 {% block body %}
-<div style="display:flex;height:calc(100vh - 48px);overflow:hidden;">
+<div class="calendar-page">
 
   {# ── LEFT: CALENDAR ───────────────────────────────────────────────────── #}
-  <div style="flex:1;min-width:0;display:flex;flex-direction:column;padding:1rem 1rem 0;overflow:hidden;">
+  <div class="calendar-main">
 
     {# Header row #}
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.75rem;flex-shrink:0;">
@@ -130,7 +130,7 @@
   </div>{# end left pane #}
 
   {# ── RIGHT: CHAT ──────────────────────────────────────────────────────── #}
-  <div style="width:340px;flex-shrink:0;border-left:1px solid #e2e8f0;display:flex;flex-direction:column;background:#fff;">
+  <div class="calendar-chat">
 
     <div style="padding:.6rem 1rem;border-bottom:1px solid #e2e8f0;font-weight:700;font-size:13px;flex-shrink:0;display:flex;align-items:center;justify-content:space-between;">
       Chat
