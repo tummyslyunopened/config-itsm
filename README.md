@@ -2,6 +2,9 @@
 
 A personal IT service management tool built with Django and SQLite. Two roles — **ops** and **engineer** — with a ticket queue, drag-and-drop scheduling, and a calendar view that overlays scheduled and logged time.
 
+Vendored as a submodule of
+[`tummyslyunopened/config`](https://github.com/tummyslyunopened/config).
+
 ---
 
 ## Setup
