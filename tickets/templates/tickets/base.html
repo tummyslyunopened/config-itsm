@@ -1,9 +1,13 @@
-<!doctype html>
+{% load static %}<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}ITSM{% endblock %}</title>
+  <link rel="icon" type="image/svg+xml" href="{% static 'tickets/favicon.svg' %}">
+  <link rel="apple-touch-icon" href="{% static 'tickets/favicon.svg' %}">
+  <meta name="apple-mobile-web-app-title" content="ITSM">
+  <meta name="theme-color" content="#4f46e5">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: system-ui, sans-serif; font-size: 14px; color: #1a1a1a; background: #f5f5f5; }
