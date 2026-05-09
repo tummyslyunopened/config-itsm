@@ -19,6 +19,15 @@
 
     .container { max-width: 960px; margin: 2rem auto; padding: 0 1rem; }
 
+    /* Horizontal-scroll wrapper for tables that don't fit on narrow screens. */
+    .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .table-scroll table { min-width: 520px; }
+
+    /* Calendar page split (calendar + chat). Desktop: side-by-side. */
+    .calendar-page { display: flex; height: calc(100vh - 48px); overflow: hidden; }
+    .calendar-main { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 1rem 1rem 0; overflow: hidden; }
+    .calendar-chat { width: 340px; flex-shrink: 0; border-left: 1px solid #e2e8f0; display: flex; flex-direction: column; background: #fff; }
+
     h1 { font-size: 20px; font-weight: 700; margin-bottom: 1.25rem; }
     h2 { font-size: 16px; font-weight: 600; margin-bottom: .75rem; }
 
@@ -115,6 +124,50 @@
     .chat-typing-dots span:nth-child(2) { animation-delay: .2s; }
     .chat-typing-dots span:nth-child(3) { animation-delay: .4s; }
     @keyframes chat-dot { 0%,80%,100% { transform:scale(.6); opacity:.3; } 40% { transform:scale(1); opacity:1; } }
+
+    /* ── Mobile (≤ 768px) ── */
+    @media (max-width: 768px) {
+      nav { padding: .4rem .75rem; gap: .6rem .9rem; height: auto; flex-wrap: wrap; }
+      nav .brand { width: 100%; padding-bottom: .15rem; }
+      nav .spacer { display: none; }
+      nav a, nav .user { font-size: 12px; }
+
+      .container { margin: 1rem auto; padding: 0 .75rem; }
+
+      h1 { font-size: 18px; }
+      h2 { font-size: 15px; }
+
+      .card { padding: 1rem; }
+
+      /* Avoid iOS auto-zoom by keeping inputs ≥ 16px. */
+      form input, form select, form textarea { font-size: 16px; }
+      .btn { padding: .5rem 1rem; font-size: 14px; }
+      .btn-sm { padding: .35rem .7rem; font-size: 13px; }
+
+      /* Two-pane queue → stack vertically. */
+      .two-pane { flex-direction: column; height: auto; overflow: visible; }
+      .pane-left { width: 100%; min-width: 0; border-right: none; border-bottom: 1px solid #e2e8f0; max-height: 45vh; }
+      .pane-right { padding: .75rem; }
+
+      /* Calendar page → stack calendar above chat. */
+      .calendar-page { flex-direction: column; height: auto; overflow: visible; }
+      .calendar-main { padding: .75rem; overflow: visible; }
+      .calendar-chat { width: 100%; border-left: none; border-top: 1px solid #e2e8f0; max-height: 60vh; }
+
+      /* Calendar grid: keep readable column widths and let it scroll horizontally. */
+      .cal-outer { overflow-x: auto; }
+      .cal-head-row, .cal-scroll, .cal-body { min-width: 600px; }
+      .cal-scroll { max-height: 60vh; }
+      .cal-gutter, .cal-gutter-head { width: 40px; }
+      .cal-hour-lbl { font-size: 9px; right: 3px; }
+
+      /* Agenda rows stack date above content. */
+      .agenda-row { flex-direction: column; gap: .25rem; }
+      .agenda-date { min-width: 0; }
+
+      /* Chat thread takes more vertical space on mobile. */
+      .chat-thread { max-height: 55vh; }
+    }
   </style>
 </head>
 <body>

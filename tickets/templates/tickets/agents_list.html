@@ -7,6 +7,7 @@
 </div>
 
 {% if agents %}
+<div class="table-scroll">
 <table>
   <thead>
     <tr>
@@ -34,6 +35,7 @@
     {% endfor %}
   </tbody>
 </table>
+</div>
 {% else %}
 <div class="card" style="color:#64748b;text-align:center;padding:2rem;">
   No agents yet. <a href="{% url 'agent_create' %}">Create your first agent.</a>
