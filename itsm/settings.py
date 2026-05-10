@@ -30,7 +30,12 @@ SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', '')
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get('DEBUG', 'False') == 'True'
 
-ALLOWED_HOSTS = ['config', '127.0.0.1', 'localhost']
+# This app is LAN-only, spawned by config-local-web-deploys behind the
+# host's firewall. The reverse proxy / firewall is the gatekeeper, not
+# Django — same trust assumption as the sibling dashboard. A literal
+# allowlist breaks every time a new device or hostname (config, the
+# host's LAN IP, a phone hitting the dashboard) shows up.
+ALLOWED_HOSTS = ['*']
 
 
 # Application definition
