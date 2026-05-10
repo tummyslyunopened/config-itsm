@@ -7,3 +7,7 @@ __pycache__/
 *.pdb
 .env
 site/
+# Application data (instance/runtime state -- gitignored, .gitkeep tracked
+# so the directory exists in fresh clones)
+.data/*
+!.data/.gitkeep
