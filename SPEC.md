@@ -128,10 +128,11 @@ One row per agent instance. Agents belong to a single engineer and are created b
 | `priority`     | IntegerField                | Unique per engineer. Lower number = higher priority.          |
 | `status`       | CharField(choices)          | `deliberating` / `committed`                                  |
 | `document`     | TextField                   | Agent's private running notes; never shown to the engineer    |
-| `is_scheduler` | BooleanField(default=False) | Exactly one agent per engineer may have this set. The scheduler is the only agent that writes `ScheduleEntry` records; all other agents post suggestions to group chat. |
 | `created_at`   | DateTimeField(auto_now_add) |                                                               |
 
-Unique together: `(engineer, priority)`. Partial unique constraint: at most one row per engineer with `is_scheduler=True`.
+Unique together: `(engineer, priority)`.
+
+The agent with the lowest `priority` value for an engineer is automatically the **scheduler** — the only agent permitted to create or delete `ScheduleEntry` records. All other agents are **suggesters**. There is no separate field for the role; it is derived from priority order. The `Agent` model exposes an `is_scheduler` property that returns `True` iff this agent has the minimum priority among its engineer's agents.
 
 ### AgentMessage
 One message in a one-on-one chat between an agent and its engineer. This chat is for updating the agent's priorities only; it does not produce schedule changes directly.
@@ -170,7 +171,6 @@ Ordered by `sent_at` ascending.
 | View own agents list and one-on-one chats                   | ✗   | ✓        |
 | Post to own agent's one-on-one chat                         | ✗   | ✓        |
 | Trigger "commit to state" on own agent                      | ✗   | ✓        |
-| Designate which of own agents is the scheduler              | ✗   | ✓        |
 
 There is no ticket ownership. Any engineer can change status or log time on any ticket. An engineer can only delete their own time entries.
 
@@ -182,12 +182,13 @@ AI agents authenticate with an **API key** rather than a browser session. Each A
 
 ### Roles
 
-Each engineer's agents split into two roles:
+Each engineer's agents split into two roles. The role is derived purely from
+priority — the engineer does not designate it explicitly:
 
-- **Scheduler** (`is_scheduler=True`) — exactly one per engineer. The only agent that can create or delete `ScheduleEntry` records. Reads suggester proposals from group chat plus its own context, then commits a final plan to the calendar.
-- **Suggester** (`is_scheduler=False`) — all other agents. Domain experts that post proposals to the engineer's group chat. They cannot write to the schedule.
+- **Scheduler** — the agent with the lowest `priority` value for the engineer. Exactly one per engineer (priorities are unique within an engineer). The only agent that can create or delete `ScheduleEntry` records. Reads suggester proposals from group chat plus its own context, then commits a final plan to the calendar.
+- **Suggester** — every other agent. Domain experts that post proposals to the engineer's group chat. They cannot write to the schedule.
 
-The engineer designates the scheduler from the agent edit page; setting an agent as scheduler atomically unsets any other scheduler for that engineer. Until a scheduler is designated, no agent can write to the calendar — suggesters will still post to chat.
+To change which agent is the scheduler, the engineer adjusts priorities on the agent edit page. The new highest-priority agent automatically becomes the scheduler on the next cycle. The system-prompt generator on the create/edit page tailors the prompt to the agent's role (scheduler vs suggester) based on the priority being assigned.
 
 ### API Key Model
 
@@ -218,7 +219,7 @@ All agent endpoints return JSON. They accept JSON request bodies where input is 
 | POST   | `/api/tickets/<id>/status/`                   | Change ticket status (`status` field)                                                                                                |
 | GET    | `/api/engineers/`                             | List all engineer users and their work schedules                                                                                     |
 | GET    | `/api/engineers/<id>/schedule/`               | Schedule entries for one engineer (`?date=YYYY-MM-DD` for a single day or `?week=YYYY-MM-DD` for the week containing that date); includes `created_by` and `locked` per entry |
-| POST   | `/api/tickets/<id>/schedule/`                 | Add a schedule entry (`engineer_id`, `date`, `start`, `end`); `created_by` is derived from the API key — the calling agent is the owner. **Rejected with 403 if the calling agent is a suggester (`is_scheduler=False`).** |
+| POST   | `/api/tickets/<id>/schedule/`                 | Add a schedule entry (`engineer_id`, `date`, `start`, `end`); `created_by` is derived from the API key — the calling agent is the owner. **Rejected with 403 if the calling agent is a suggester (i.e. not the engineer's highest-priority agent).** |
 | GET    | `/api/engineers/<id>/chat/`                   | All non-hidden messages in an engineer's group chat, ordered oldest-first                                                            |
 | POST   | `/api/engineers/<id>/chat/`                   | Post a message to an engineer's group chat (`body` field); sender is the API key's linked ops user                                   |
 | GET    | `/api/agents/<agent_id>/state/`               | Read an agent's `status` and `document`                                                                                              |
@@ -246,11 +247,10 @@ TRIGGER: new chat   — fires for the engineer whose group chat received the mes
 
 ═══════════════════════════════════════════════════════
 PRE-CYCLE — SCHEDULER CHECK
-  Look up the engineer's scheduler agent (is_scheduler=True).
-  If none exists:
-    Post a system message to the group chat asking the engineer
-    to designate one. Skip the cycle entirely. Suggesters do not
-    run because their suggestions cannot be acted on.
+  Identify the engineer's scheduler — the agent with the lowest
+  priority value. If the engineer has no agents at all, skip the
+  cycle entirely. With at least one agent, the scheduler always
+  exists by definition.
 
 MESSAGE TRIGGER ONLY — BROADCAST CHECK (suggesters only)
   If the message explicitly addresses all agents
@@ -326,7 +326,10 @@ agents/
   base.py              GenericAgent class
                          Initialised with an Agent DB record.
                          Claude API client (api key from environment).
-                         is_scheduler property
+                         is_scheduler property (delegates to the
+                           Agent model's derived property: True iff
+                           this agent has the minimum priority for
+                           its engineer)
                          Shared methods:
                            get_chat_history(engineer_id)
                              — excludes hidden=True messages
@@ -402,7 +405,7 @@ agents/
 | `/chat/stop-agents/`          | All      | POST — marks all the engineer's deliberating agents as committed  |
 | `/agents/`                    | Engineer | List the engineer's own agents                                    |
 | `/agents/create/`             | Engineer | Create a new agent                                                |
-| `/agents/suggest-prompt/`     | Engineer | POST `{name, existing_prompt, user_prompt}` → JSON `{prompt}`; generates a system prompt via Claude using the agent name, current prompt, user instructions, and engineer's work schedule |
+| `/agents/suggest-prompt/`     | Engineer | POST `{name, priority, existing_prompt, user_prompt, [agent_pk]}` → JSON `{prompt}`; generates a system prompt via Claude using the agent name, current prompt, user instructions, and engineer's work schedule. Inspects `priority` to determine whether this agent is the scheduler (lowest priority for the engineer) and tailors the prompt's role section accordingly |
 | `/agents/<id>/`               | Engineer | One-on-one chat with an agent + Commit to State button            |
 | `/agents/<id>/edit/`          | Engineer | Edit an agent's name, priority, and system prompt                 |
 
@@ -512,26 +515,27 @@ All `start` and `end` time fields across schedule entries, time entries, and wor
 
 ### Agent List — `/agents/`
 - Engineer only.
-- Lists all agents belonging to the logged-in engineer, showing name, priority, role (Scheduler / Suggester), current status, and links to the chat and edit views.
-- A warning banner appears at the top when no agent is designated as the scheduler.
+- Lists all agents belonging to the logged-in engineer, showing name, priority, role (Scheduler / Suggester — derived from priority order), current status, and links to the chat and edit views.
+- An informational note at the top reminds the engineer that the highest-priority (lowest number) agent is automatically the scheduler.
 - A **Create Agent** button links to `/agents/create/`.
 
 ### Create Agent — `/agents/create/`
 - Engineer only.
-- Form fields: `name`, `priority` (integer, unique among the engineer's agents), `system_prompt`, `is_scheduler` (checkbox).
-- Checking `is_scheduler` while another agent already holds that role atomically transfers the role to the new agent.
-- A **Generate from name & instructions** button calls `/agents/suggest-prompt/` (AJAX). It sends the agent name, any text already in the system prompt field, and an optional free-text instructions box. The returned suggestion fills the system prompt textarea for review before saving.
+- Form fields: `name`, `priority` (integer, unique among the engineer's agents), `system_prompt`.
+- The form does not ask the engineer to designate a scheduler. Whichever of the engineer's agents holds the lowest `priority` value automatically becomes the scheduler.
+- A **Generate from name & instructions** button calls `/agents/suggest-prompt/` (AJAX). It sends the agent name, the priority being assigned, any text already in the system prompt field, and an optional free-text instructions box. The endpoint detects whether this agent will be the scheduler (lowest priority for the engineer) and tailors the generated prompt to the scheduler or suggester role accordingly. The returned suggestion fills the system prompt textarea for review before saving.
 - On save, the system auto-provisions a dedicated ops `User`, `UserProfile`, and `ApiKey` for the new agent.
 - Redirects to `/agents/` after creation.
 
 ### Agent Suggest Prompt — `/agents/suggest-prompt/`
-- Engineer only. POST `{name, existing_prompt, user_prompt}` → JSON `{prompt}`.
+- Engineer only. POST `{name, priority, existing_prompt, user_prompt, [agent_pk]}` → JSON `{prompt}`.
 - Calls Claude to generate or refine a system prompt. The meta-prompt includes:
   - The agent name.
   - The existing system prompt (rewrite or refine, not verbatim copy).
   - The user's specific instructions (followed closely).
   - The engineer's full `WorkSchedule` (days and hours), so the generated prompt references actual working hours.
-- The generated prompt instructs the agent on its domain, example activities, durations, and conflict-handling behaviour (yield to higher-priority agents).
+  - A role section: the endpoint compares the submitted `priority` against the engineer's other agents (excluding `agent_pk` when supplied for an edit). If the new value is the lowest, the meta-prompt instructs Claude to write a SCHEDULER prompt; otherwise it instructs Claude to write a SUGGESTER prompt.
+- The generated prompt opens by naming the agent's role, then covers domain, example activities, durations, and conflict-handling behaviour appropriate to the role (scheduler resolves conflicts in priority order; suggesters yield to higher-priority suggestions).
 
 ### Agent Chat — `/agents/<id>/`
 - Engineer only. The engineer must own the agent.
@@ -541,7 +545,7 @@ All `start` and `end` time fields across schedule entries, time entries, and wor
 
 ### Edit Agent — `/agents/<id>/edit/`
 - Engineer only. The engineer must own the agent.
-- Form fields: `name`, `priority`, `system_prompt`, `is_scheduler` (checkbox).
-- Checking `is_scheduler` when another agent currently holds that role atomically transfers the role to this agent.
+- Form fields: `name`, `priority`, `system_prompt`.
+- To change which agent is the scheduler, edit priorities so a different agent has the lowest priority value; the scheduler role transfers automatically.
 - A **Regenerate from name, current prompt & instructions** button works identically to the one on the create form, pre-seeding the existing system prompt as the `existing_prompt` input.
 - Redirects to `/agents/` after saving.

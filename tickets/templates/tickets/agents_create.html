@@ -16,21 +16,13 @@
     <input type="text" name="name" id="agent-name" value="{{ request.POST.name }}" placeholder="e.g. Health &amp; Fitness" autofocus>
 
     <label>Priority <span style="font-weight:400;color:#64748b;">(lower number = higher priority; must be unique among your agents)</span></label>
-    <input type="number" name="priority" value="{{ request.POST.priority }}" min="1" placeholder="1">
+    <input type="number" name="priority" id="agent-priority" value="{{ request.POST.priority }}" min="1" placeholder="1">
+    <div style="font-size:12px;color:#64748b;margin-top:.25rem;">
+      The highest-priority agent (lowest number) is automatically the <strong>scheduler</strong>; it is the only agent that writes to your calendar. All others are suggesters that post proposals to group chat.
+    </div>
 
     <label>System Prompt</label>
     <textarea name="system_prompt" id="system-prompt" rows="10" placeholder="Describe this agent's domain, goals, and how it should behave…">{{ request.POST.system_prompt }}</textarea>
-
-    <label style="display:flex;align-items:center;gap:.5rem;margin-top:.75rem;font-weight:600;">
-      <input type="checkbox" name="is_scheduler" {% if request.POST.is_scheduler %}checked{% endif %} style="margin:0;">
-      Scheduler
-      <span style="font-weight:400;color:#64748b;">— this agent writes the calendar (only one allowed; checking this unsets any other scheduler)</span>
-    </label>
-    {% if has_scheduler %}
-      <div style="font-size:12px;color:#92400e;background:#fef3c7;border:1px solid #fde68a;padding:.4rem .55rem;border-radius:6px;margin-top:.4rem;">
-        You already have a scheduler agent. Checking the box above will move the scheduler role to this new agent.
-      </div>
-    {% endif %}
 
     <div style="margin-top:.75rem;border:1px solid #e2e8f0;border-radius:6px;padding:.75rem;background:#f8fafc;">
       <label style="margin-top:0;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;">Generate / refine prompt</label>
@@ -53,6 +45,7 @@
   var btn       = document.getElementById('suggest-btn');
   var status    = document.getElementById('suggest-status');
   var nameEl    = document.getElementById('agent-name');
+  var priorityEl = document.getElementById('agent-priority');
   var ta        = document.getElementById('system-prompt');
   var userPrompt = document.getElementById('user-prompt');
   var csrf      = document.querySelector('[name=csrfmiddlewaretoken]').value;
@@ -66,6 +59,7 @@
     var fd = new FormData();
     fd.append('csrfmiddlewaretoken', csrf);
     fd.append('name', name);
+    fd.append('priority', priorityEl.value);
     fd.append('existing_prompt', ta.value);
     fd.append('user_prompt', userPrompt.value);
     fetch(url, { method: 'POST', body: fd, credentials: 'same-origin' })

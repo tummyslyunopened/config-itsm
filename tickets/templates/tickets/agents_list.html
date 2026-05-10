@@ -6,15 +6,12 @@
   <a href="{% url 'agent_create' %}" class="btn btn-primary">+ Create Agent</a>
 </div>
 
-{% if agents and not has_scheduler %}
-<div class="card" style="border-color:#fdba74;background:#fff7ed;color:#9a3412;margin-bottom:1rem;">
-  None of your agents are designated as the scheduler. Until one is, no agent
-  can write to your calendar — others will only post suggestions to chat.
-  Edit an agent to make it the scheduler.
-</div>
-{% endif %}
-
 {% if agents %}
+<div class="card" style="color:#475569;margin-bottom:1rem;">
+  Your highest-priority agent (lowest number) is automatically the
+  <strong>scheduler</strong> — the only agent that writes to your calendar.
+  All other agents are suggesters that post proposals to group chat.
+</div>
 
 <div class="table-scroll">
 <table>

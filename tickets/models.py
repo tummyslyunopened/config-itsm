@@ -154,22 +154,27 @@ class Agent(models.Model):
     priority = models.IntegerField()
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=DELIBERATING)
     document = models.TextField(blank=True, default='')
-    is_scheduler = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ['priority']
         unique_together = [('engineer', 'priority')]
-        constraints = [
-            models.UniqueConstraint(
-                fields=['engineer'],
-                condition=models.Q(is_scheduler=True),
-                name='one_scheduler_per_engineer',
-            ),
-        ]
 
     def __str__(self):
         return f'{self.name} ({self.engineer.username})'
+
+    @property
+    def is_scheduler(self):
+        """The highest-priority (lowest priority number) agent for an engineer is
+        automatically the scheduler. Ties cannot occur due to unique_together."""
+        min_priority = (
+            type(self).objects
+            .filter(engineer_id=self.engineer_id)
+            .order_by('priority')
+            .values_list('priority', flat=True)
+            .first()
+        )
+        return min_priority is not None and self.priority == min_priority
 
 
 class AgentMessage(models.Model):

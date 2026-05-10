@@ -2,7 +2,7 @@ import logging
 import re
 from datetime import date, timedelta
 
-from tickets.models import Agent, ChatMessage
+from tickets.models import Agent
 from .base import GenericAgent
 
 logger = logging.getLogger(__name__)
@@ -50,27 +50,12 @@ def _all_agents_addressed(message):
     return bool(re.search(r'\ball agents?\b|\bevery agent\b|\ball of you\b', msg))
 
 
-def _post_system_chat(engineer_id, body):
-    """Post a non-agent system message to the engineer's group chat.
-    Used for runner-level errors when no specific agent owns the failure."""
-    from django.contrib.auth.models import User
-    from django.db.models import Q
-    sender = (
-        User.objects
-        .filter(Q(is_superuser=True) | Q(profile__role='ops'))
-        .order_by('-is_superuser', 'pk')
-        .first()
-    )
-    if sender is None:
-        return
-    ChatMessage.objects.create(engineer_id=engineer_id, sender=sender, body=body)
-
-
 def _build_agents_for_engineer(engineer_id):
     """Return (scheduler, [suggesters]) for an engineer.
 
-    Suggesters are returned in priority order (lowest number first). Scheduler
-    is None if the engineer has not designated one."""
+    The highest-priority (lowest priority number) agent is automatically the
+    scheduler. All others are suggesters, returned in priority order.
+    Scheduler is None when the engineer has no agents."""
     records = list(Agent.objects.filter(engineer_id=engineer_id).order_by('priority'))
     scheduler = None
     suggesters = []
@@ -80,7 +65,7 @@ def _build_agents_for_engineer(engineer_id):
         except Exception:
             logger.exception(f'Failed to initialise agent {record.id} for engineer {engineer_id}')
             continue
-        if record.is_scheduler and scheduler is None:
+        if scheduler is None:
             scheduler = agent
         else:
             suggesters.append(agent)
@@ -128,12 +113,6 @@ def on_message(engineer_id, message):
     scheduler, suggesters = _build_agents_for_engineer(engineer_id)
 
     if scheduler is None:
-        if suggesters:
-            _post_system_chat(
-                engineer_id,
-                "No scheduler agent is designated. Mark one of your agents as the "
-                "scheduler in the Agents page so it can write to your calendar.",
-            )
         return
 
     broadcast = _all_agents_addressed(message)
