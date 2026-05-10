@@ -1,13 +1,19 @@
 import anthropic
+import json
 import threading
 from datetime import date, timedelta
+from pathlib import Path
+from django.conf import settings
 from django.contrib.auth.models import User
 from django.db import connection, transaction
 from django.db.models import F
 from django.shortcuts import render, get_object_or_404, redirect
+from django.utils import timezone
 from django.contrib.auth.decorators import login_required
 from django.http import HttpResponseForbidden, JsonResponse
 from .models import Agent, AgentMessage, ApiKey, Ticket, ScheduleEntry, TimeEntry, WorkSchedule, ChatMessage, DAY_KEYS, DAY_LABELS, UserProfile
+
+CHAT_REPORTS_PATH = Path(settings.BASE_DIR) / '.data' / 'chat_reports.jsonl'
 
 
 def _trigger_agents(engineer_id, message):
@@ -329,6 +335,22 @@ def calendar_view(request):
     except WorkSchedule.DoesNotExist:
         ws = None
     get_work_hours = _make_get_work_hours(ws)
+
+    if view_mode == 'instructions':
+        chat_msgs = (
+            ChatMessage.objects
+            .filter(engineer=request.user, hidden=False)
+            .select_related('sender')
+            .order_by('sent_at')
+        )
+        return render(request, 'tickets/calendar.html', {
+            'view_mode': view_mode,
+            'today': today,
+            'chat_msgs': chat_msgs,
+            'last_message_id': chat_msgs.values_list('id', flat=True).last() or 0,
+            'scroll_to': 0,
+            'grid_height': GRID_HEIGHT,
+        })
 
     if view_mode == 'agenda':
         schedule_entries = list(
@@ -732,6 +754,58 @@ def agents_stop(request):
         return JsonResponse({'error': 'forbidden'}, status=403)
 
     Agent.objects.filter(engineer=engineer, status=Agent.DELIBERATING).update(status=Agent.COMMITTED)
+    return JsonResponse({'ok': True})
+
+
+@login_required
+def chat_report(request):
+    """POST {message_id, [reason]} — append a chat-message report to the cleartext
+    JSONL file on disk. Reports are intentionally NOT stored in the database so
+    they survive db wipes and can be diffed / grepped during diagnosis."""
+    if request.method != 'POST':
+        return JsonResponse({'error': 'method not allowed'}, status=405)
+
+    try:
+        message_id = int(request.POST.get('message_id', 0))
+    except (ValueError, TypeError):
+        return JsonResponse({'error': 'message_id required'}, status=400)
+    if message_id <= 0:
+        return JsonResponse({'error': 'message_id required'}, status=400)
+
+    try:
+        msg = ChatMessage.objects.select_related('sender', 'engineer').get(pk=message_id)
+    except ChatMessage.DoesNotExist:
+        return JsonResponse({'error': 'message not found'}, status=404)
+
+    user_role = role(request)
+    if user_role == 'engineer' and msg.engineer_id != request.user.id:
+        return HttpResponseForbidden()
+    if user_role not in ('engineer', 'ops'):
+        return HttpResponseForbidden()
+
+    reason = (request.POST.get('reason') or '').strip()[:1000]
+
+    record = {
+        'reported_at': timezone.now().isoformat(),
+        'reporter': request.user.username,
+        'reporter_role': user_role,
+        'reason': reason,
+        'message': {
+            'id': msg.id,
+            'engineer_id': msg.engineer_id,
+            'engineer': msg.engineer.username,
+            'sender_id': msg.sender_id,
+            'sender': msg.sender.username,
+            'body': msg.body,
+            'sent_at': msg.sent_at.isoformat(),
+            'hidden': msg.hidden,
+        },
+    }
+
+    CHAT_REPORTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with CHAT_REPORTS_PATH.open('a', encoding='utf-8') as f:
+        f.write(json.dumps(record, ensure_ascii=False) + '\n')
+
     return JsonResponse({'ok': True})
 
 

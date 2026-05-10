@@ -264,24 +264,45 @@ MESSAGE TRIGGER ONLY — BROADCAST CHECK (suggesters only)
   The scheduler always engages whenever a cycle runs.
 
 MESSAGE TRIGGER ONLY — REMOVAL CHECK (scheduler only)
-  Scheduler asks Claude:
+  A deterministic regex pre-checks the message for unambiguous
+  cancellation phrasing — `clear`/`cancel`/`wipe`/`drop` followed
+  by a schedule-related noun (`schedule`, `calendar`, `today`,
+  `tonight`, `tomorrow`, a weekday, `week`, `day`, `rest`). If the
+  pre-check matches, the scheduler treats the message as a removal
+  directive without consulting Claude. Otherwise it asks Claude:
     "Is this message asking to remove, cancel, clear, or delete
      scheduled entries?"
-  If YES:
+  If YES (either path):
     Scheduler deletes its own non-locked future entries for the
     target date(s) and posts a confirmation to group chat.
     All agents → status: committed. Cycle ends.
 
 MESSAGE TRIGGER ONLY — DATE PARSING
   Target dates are extracted from the message:
+    "today" / "tonight" /
+    "this morning|afternoon|
+     evening|night" /
+    "rest of the|my|today|
+     this" / "later today"  → today (these "today anchors" win
+                              over any weekday name in the same
+                              message — e.g. "rest of my Sunday"
+                              while it IS Sunday stays today)
     "tomorrow"              → next calendar day
     "next <weekday>"        → that weekday of the following week
-    "<weekday>"             → the nearest upcoming occurrence of that day
-    "next week" /
-    "whole week" /
+    "<weekday>"             → today if the current weekday matches,
+                              otherwise the nearest upcoming
+                              occurrence of that day
+    "next week"             → Mon–Fri of next week
     "this week" /
+    "whole week" /
     "all week" /
-    "every day"             → Mon–Fri of the relevant week
+    "rest of (the|my|this)
+     week" /
+    "every day" /
+    "each day"              → Mon–Fri of the current week, filtered
+                              to days at or after today; falls back
+                              to today if every weekday this week is
+                              already past
   The scheduling cycle runs once per extracted date.
 ═══════════════════════════════════════════════════════
 
@@ -403,6 +424,7 @@ agents/
 | `/chat/post/`                 | All      | JSON POST endpoint — saves a message and triggers agents          |
 | `/chat/clear/`                | All      | POST — marks all visible messages as hidden                       |
 | `/chat/stop-agents/`          | All      | POST — marks all the engineer's deliberating agents as committed  |
+| `/chat/report/`               | All      | POST `{message_id, [reason]}` — appends a report record to the cleartext JSONL log on disk |
 | `/agents/`                    | Engineer | List the engineer's own agents                                    |
 | `/agents/create/`             | Engineer | Create a new agent                                                |
 | `/agents/suggest-prompt/`     | Engineer | POST `{name, priority, existing_prompt, user_prompt, [agent_pk]}` → JSON `{prompt}`; generates a system prompt via Claude using the agent name, current prompt, user instructions, and engineer's work schedule. Inspects `priority` to determine whether this agent is the scheduler (lowest priority for the engineer) and tailors the prompt's role section accordingly |
@@ -453,7 +475,7 @@ All `start` and `end` time fields across schedule entries, time entries, and wor
 ### Engineer Calendar — `/calendar/`
 - Engineer only.
 - **Two-pane layout:** the calendar fills the left pane; a live chat panel occupies a fixed-width right pane. The two panes fill the full viewport height below the nav bar.
-- Three view modes: **day** (default), **week**, **agenda**. Toggle via buttons in the calendar pane header.
+- Four view modes: **day** (default), **week**, **agenda**, **instructions**. Toggle via buttons in the calendar pane header.
 - Shows schedule entries and time entries for the logged-in engineer.
 - Schedule entries render in blue; time entries in green.
 - Clicking an entry navigates to that ticket's detail page.
@@ -470,6 +492,8 @@ All `start` and `end` time fields across schedule entries, time entries, and wor
   - Animated typing indicator (`...`) appears while any of the engineer's agents has `status = deliberating`.
   - The engineer can post messages directly from the calendar without navigating away.
   - A **Clear** button at the top of the chat panel marks all visible messages as hidden.
+  - Each chat message has a small **Report** link in its meta row. Clicking it asks for an optional reason and POSTs to `/chat/report/`, which appends a cleartext JSON record to disk for diagnosis. The link visibly switches to "Reported ✓" on success. Reports are not for content moderation — they exist to support future feature/issue triage.
+- **Instructions view:** a static help page rendered in place of the calendar grid. Explains how the agents interpret group-chat messages (broadcast phrasing, removal verbs, date references, working-hours bounds) and how to use the **Stop agents** and **Report** controls. The chat panel remains functional in this view so the engineer can read tips and post a message in the same screen.
 
 ### Ops Queue — `/queue/`
 - Ops only. Two-pane layout:
@@ -512,6 +536,12 @@ All `start` and `end` time fields across schedule entries, time entries, and wor
 ### Chat Clear — `/chat/clear/`
 - POST `{[engineer_id]}`. Sets `hidden=True` on all currently-visible messages for the engineer.
 - Returns `{ok: true}`.
+
+### Chat Report — `/chat/report/`
+- POST `{message_id, [reason]}`. Appends a cleartext JSON record describing the message to `<repo_root>/.data/chat_reports.jsonl` (one JSON object per line). Records are intentionally NOT stored in the database so they survive db wipes and can be diffed or grepped during diagnosis. The link is for future feature/issue triage, not content moderation.
+- Each record has the shape `{reported_at, reporter, reporter_role, reason, message: {id, engineer_id, engineer, sender_id, sender, body, sent_at, hidden}}`.
+- Engineers can only report messages from their own chat; ops can report any message they can view. Reasons are trimmed to 1000 chars.
+- Returns `{ok: true}` on success.
 
 ### Agent List — `/agents/`
 - Engineer only.
