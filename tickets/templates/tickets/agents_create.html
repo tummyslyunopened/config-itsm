@@ -15,10 +15,11 @@
     <label>Name</label>
     <input type="text" name="name" id="agent-name" value="{{ request.POST.name }}" placeholder="e.g. Health &amp; Fitness" autofocus>
 
-    <label>Priority <span style="font-weight:400;color:#64748b;">(lower number = higher priority; must be unique among your agents)</span></label>
+    <label>Priority <span style="font-weight:400;color:#64748b;">(lower number = higher priority)</span></label>
     <input type="number" name="priority" id="agent-priority" value="{{ request.POST.priority }}" min="1" placeholder="1">
     <div style="font-size:12px;color:#64748b;margin-top:.25rem;">
       The highest-priority agent (lowest number) is automatically the <strong>scheduler</strong>; it is the only agent that writes to your calendar. All others are suggesters that post proposals to group chat.
+      If the chosen priority is already taken, the existing agent and any contiguous block above it are pushed down by one to make room.
     </div>
 
     <label>System Prompt</label>

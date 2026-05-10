@@ -521,8 +521,9 @@ All `start` and `end` time fields across schedule entries, time entries, and wor
 
 ### Create Agent — `/agents/create/`
 - Engineer only.
-- Form fields: `name`, `priority` (integer, unique among the engineer's agents), `system_prompt`.
+- Form fields: `name`, `priority` (positive integer; uniqueness is enforced automatically — see below), `system_prompt`.
 - The form does not ask the engineer to designate a scheduler. Whichever of the engineer's agents holds the lowest `priority` value automatically becomes the scheduler.
+- If the chosen `priority` is already in use by another of the engineer's agents, that agent — and any contiguous block of agents at successive priorities above it — is shifted down by one (priority + 1 each) to make room for the new agent. The shift stops at the first gap in the priority sequence, so existing gaps are preserved. The whole operation is atomic.
 - A **Generate from name & instructions** button calls `/agents/suggest-prompt/` (AJAX). It sends the agent name, the priority being assigned, any text already in the system prompt field, and an optional free-text instructions box. The endpoint detects whether this agent will be the scheduler (lowest priority for the engineer) and tailors the generated prompt to the scheduler or suggester role accordingly. The returned suggestion fills the system prompt textarea for review before saving.
 - On save, the system auto-provisions a dedicated ops `User`, `UserProfile`, and `ApiKey` for the new agent.
 - Redirects to `/agents/` after creation.
@@ -547,5 +548,6 @@ All `start` and `end` time fields across schedule entries, time entries, and wor
 - Engineer only. The engineer must own the agent.
 - Form fields: `name`, `priority`, `system_prompt`.
 - To change which agent is the scheduler, edit priorities so a different agent has the lowest priority value; the scheduler role transfers automatically.
+- If the new `priority` collides with another of the engineer's agents, the same shift behaviour as the create form applies: that agent and the contiguous block above it are pushed down by one to make room.
 - A **Regenerate from name, current prompt & instructions** button works identically to the one on the create form, pre-seeding the existing system prompt as the `existing_prompt` input.
 - Redirects to `/agents/` after saving.

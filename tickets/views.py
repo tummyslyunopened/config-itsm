@@ -2,7 +2,8 @@ import anthropic
 import threading
 from datetime import date, timedelta
 from django.contrib.auth.models import User
-from django.db import connection
+from django.db import connection, transaction
+from django.db.models import F
 from django.shortcuts import render, get_object_or_404, redirect
 from django.contrib.auth.decorators import login_required
 from django.http import HttpResponseForbidden, JsonResponse
@@ -753,6 +754,32 @@ def _provision_agent_ops_user(name):
     return ops_user
 
 
+def _shift_agents_to_make_room(engineer, target_priority, exclude_pk=None):
+    """Free up `target_priority` for `engineer` by pushing the contiguous block
+    of agents at priorities target, target+1, target+2, ... each down by one.
+    Stops at the first gap. Shifts in descending priority order so the unique
+    `(engineer, priority)` constraint never trips mid-update.
+    Returns the list of priorities that were shifted (low→high)."""
+    qs = Agent.objects.filter(engineer=engineer, priority__gte=target_priority)
+    if exclude_pk is not None:
+        qs = qs.exclude(pk=exclude_pk)
+    occupied = list(qs.order_by('priority').values_list('id', 'priority'))
+
+    to_shift = []
+    expected = target_priority
+    for pk, prio in occupied:
+        if prio == expected:
+            to_shift.append((pk, prio))
+            expected += 1
+        else:
+            break
+
+    for pk, _ in reversed(to_shift):
+        Agent.objects.filter(pk=pk).update(priority=F('priority') + 1)
+
+    return [prio for _, prio in to_shift]
+
+
 @require_role('engineer')
 def agent_list(request):
     agents = Agent.objects.filter(engineer=request.user).order_by('priority')
@@ -771,19 +798,20 @@ def agent_create(request):
             error = 'Name is required.'
         elif not system_prompt:
             error = 'System prompt is required.'
-        elif not priority_raw.isdigit():
+        elif not priority_raw.isdigit() or int(priority_raw) < 1:
             error = 'Priority must be a positive integer.'
-        elif Agent.objects.filter(engineer=request.user, priority=int(priority_raw)).exists():
-            error = f'You already have an agent with priority {priority_raw}.'
         else:
-            ops_user = _provision_agent_ops_user(name)
-            Agent.objects.create(
-                engineer=request.user,
-                ops_user=ops_user,
-                name=name,
-                system_prompt=system_prompt,
-                priority=int(priority_raw),
-            )
+            target = int(priority_raw)
+            with transaction.atomic():
+                _shift_agents_to_make_room(request.user, target)
+                ops_user = _provision_agent_ops_user(name)
+                Agent.objects.create(
+                    engineer=request.user,
+                    ops_user=ops_user,
+                    name=name,
+                    system_prompt=system_prompt,
+                    priority=target,
+                )
             return redirect('agents_list')
 
     return render(request, 'tickets/agents_create.html', {'error': error})
@@ -827,20 +855,22 @@ def agent_edit(request, pk):
             error = 'Name is required.'
         elif not system_prompt:
             error = 'System prompt is required.'
-        elif not priority_raw.isdigit():
+        elif not priority_raw.isdigit() or int(priority_raw) < 1:
             error = 'Priority must be a positive integer.'
-        elif (
-            Agent.objects
-            .filter(engineer=request.user, priority=int(priority_raw))
-            .exclude(pk=agent.pk)
-            .exists()
-        ):
-            error = f'You already have an agent with priority {priority_raw}.'
         else:
-            agent.name = name
-            agent.system_prompt = system_prompt
-            agent.priority = int(priority_raw)
-            agent.save()
+            target = int(priority_raw)
+            with transaction.atomic():
+                if target != agent.priority:
+                    # Park the edited agent off the priority axis so the shift
+                    # cannot collide with its current slot, then reinsert.
+                    Agent.objects.filter(pk=agent.pk).update(priority=-agent.pk)
+                    _shift_agents_to_make_room(
+                        request.user, target, exclude_pk=agent.pk,
+                    )
+                agent.name = name
+                agent.system_prompt = system_prompt
+                agent.priority = target
+                agent.save()
             return redirect('agents_list')
 
     return render(request, 'tickets/agents_edit.html', {'agent': agent, 'error': error})
