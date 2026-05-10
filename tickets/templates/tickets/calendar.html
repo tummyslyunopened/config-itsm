@@ -8,10 +8,10 @@
   <div class="calendar-main">
 
     {# Header row #}
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.75rem;flex-shrink:0;">
-      <div style="display:flex;align-items:center;gap:1rem;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.75rem;flex-shrink:0;flex-wrap:wrap;gap:.5rem;">
+      <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap;">
         <h1 style="margin:0;font-size:18px;">Calendar</h1>
-        {% if view_mode != 'agenda' %}
+        {% if view_mode == 'day' or view_mode == 'week' %}
         <a href="{{ prev_nav }}" class="btn btn-outline btn-sm">←</a>
         {% if view_mode == 'day' %}
           <span style="font-weight:700;font-size:13px;">{{ week_days.0|date:"l, N j, Y" }}</span>
@@ -25,10 +25,103 @@
         <a href="?view=week" class="btn btn-sm {% if view_mode == 'week' %}btn-primary{% else %}btn-outline{% endif %}">Week</a>
         <a href="?view=day&day={{ today|date:'Y-m-d' }}" class="btn btn-sm {% if view_mode == 'day' %}btn-primary{% else %}btn-outline{% endif %}">Day</a>
         <a href="?view=agenda" class="btn btn-sm {% if view_mode == 'agenda' %}btn-primary{% else %}btn-outline{% endif %}">Agenda</a>
+        <a href="?view=instructions" class="btn btn-sm {% if view_mode == 'instructions' %}btn-primary{% else %}btn-outline{% endif %}">Instructions</a>
       </div>
     </div>
 
-    {% if view_mode == 'agenda' %}
+    {% if view_mode == 'instructions' %}
+    {# ── INSTRUCTIONS ── #}
+    <div style="flex:1;overflow-y:auto;padding-bottom:1rem;font-size:13px;line-height:1.55;">
+      <div class="card" style="padding:1.25rem;">
+        <h2 style="margin-bottom:.75rem;">How your agents read group chat</h2>
+        <p style="color:#475569;margin-bottom:.75rem;">
+          When you post in your group chat, every one of your agents
+          examines the message. The
+          <a href="{% url 'agents_list' %}">highest-priority agent</a>
+          (lowest priority number) is the <strong>scheduler</strong> — the
+          only agent that writes blocks to your calendar. All other agents
+          are <strong>suggesters</strong> that post proposals to chat;
+          the scheduler weighs the proposals and commits the final plan.
+        </p>
+
+        <h2 style="margin-top:1rem;">Tips for prompt phrasing</h2>
+        <ul style="margin-left:1.25rem;color:#1f2937;">
+          <li style="margin-top:.4rem;">
+            <strong>Address everyone deterministically</strong> with phrases like
+            <em>"all agents"</em>, <em>"every agent"</em>, or
+            <em>"all of you"</em>. Each suggester is then included without an
+            LLM relevance check, so the cycle runs even if Claude is
+            unavailable.
+          </li>
+          <li style="margin-top:.4rem;">
+            <strong>Be explicit about dates.</strong> Say <em>"today"</em>,
+            <em>"tonight"</em>, <em>"tomorrow"</em>, a specific weekday
+            (<em>"Monday"</em>), or <em>"next week"</em>. Bare weekday names
+            (<em>"Sunday"</em>) resolve to today when it IS that day, otherwise
+            the nearest upcoming occurrence.
+          </li>
+          <li style="margin-top:.4rem;">
+            <strong>To clear or cancel</strong> blocks, use one of:
+            <em>clear</em>, <em>cancel</em>, <em>wipe</em>, or <em>drop</em>
+            followed by what you want cleared
+            (<em>"clear my schedule for today"</em>,
+            <em>"cancel tomorrow's calendar"</em>). The scheduler will only
+            remove its own non-locked entries; manual ops entries are left in
+            place.
+          </li>
+          <li style="margin-top:.4rem;">
+            <strong>Working hours bound everything.</strong> Agents will not
+            schedule outside the start/end times in
+            <a href="{% url 'work_schedule' %}">My Hours</a> for the day in
+            question. Update those first if your availability changes.
+          </li>
+          <li style="margin-top:.4rem;">
+            <strong>Context is your private state.</strong> Mention
+            constraints inline (<em>"I'm out running errands until 5pm"</em>);
+            suggesters and the scheduler read the recent chat history when
+            deliberating.
+          </li>
+          <li style="margin-top:.4rem;">
+            <strong>Stuck "thinking"?</strong> The
+            <em>Stop agents</em> button beside the chat marks every
+            deliberating agent as committed — useful if a cycle is taking
+            too long or the API is throttled.
+          </li>
+          <li style="margin-top:.4rem;">
+            <strong>Report a confusing reply</strong> with the small
+            <em>Report</em> link beside any chat message. Reports are saved to
+            disk as cleartext JSON for later diagnosis — no content is
+            forwarded anywhere.
+          </li>
+        </ul>
+
+        <h2 style="margin-top:1rem;">What each agent does in a cycle</h2>
+        <ol style="margin-left:1.25rem;color:#1f2937;">
+          <li style="margin-top:.4rem;">
+            <strong>Reset</strong> — the scheduler deletes its own non-locked
+            future entries for the target date.
+          </li>
+          <li style="margin-top:.4rem;">
+            <strong>Suggest</strong> — every relevant suggester posts a
+            <code>SUGGESTION…END</code> block to chat in priority order.
+          </li>
+          <li style="margin-top:.4rem;">
+            <strong>Schedule</strong> — the scheduler reads each suggester's
+            latest block and commits a final <code>PLAN…END</code>, creating
+            tickets and calendar entries.
+          </li>
+        </ol>
+
+        <p style="margin-top:1rem;color:#64748b;font-size:12px;">
+          Ambiguous prompts (no clear date, no broadcast, no removal verb) fall
+          back to an LLM relevance check per suggester. The scheduler always
+          engages when a cycle runs, so your calendar will always reflect the
+          latest committed plan.
+        </p>
+      </div>
+    </div>
+
+    {% elif view_mode == 'agenda' %}
     {# ── AGENDA ── #}
     <div style="flex:1;overflow-y:auto;padding-bottom:1rem;">
       <div style="margin-bottom:.75rem;font-size:13px;color:#64748b;">Upcoming — next 60 entries</div>
@@ -142,9 +235,10 @@
 
     <div class="chat-thread" id="chat-thread" style="flex:1;max-height:none;border:none;border-radius:0;padding:.75rem;">
       {% for msg in chat_msgs %}
-      <div class="chat-msg">
+      <div class="chat-msg" data-msg-id="{{ msg.id }}">
         <div class="chat-msg-meta">
           <strong>{{ msg.sender.username }}</strong> &nbsp;·&nbsp; {{ msg.sent_at|date:"M d, H:i" }}
+          <a href="#" class="chat-msg-report" title="Save a cleartext report of this message for diagnosis">Report</a>
         </div>
         <div class="chat-msg-body">{{ msg.body }}</div>
       </div>
@@ -197,7 +291,7 @@
   setInterval(positionNowLine, 60 * 1000);
 
   /* ── calendar live-refresh ── */
-  {% if view_mode != 'agenda' %}
+  {% if view_mode == 'day' or view_mode == 'week' %}
   var fragUrl = location.pathname + location.search;
   fragUrl += (fragUrl.indexOf('?') === -1 ? '?' : '&') + 'fragment=1';
 
@@ -248,9 +342,12 @@
     if (empty) empty.remove();
     var div = document.createElement('div');
     div.className = 'chat-msg';
+    div.setAttribute('data-msg-id', msg.id);
     div.innerHTML =
       '<div class="chat-msg-meta"><strong>' + esc(msg.sender) + '</strong>' +
-      ' &nbsp;·&nbsp; ' + esc(msg.sent_at) + '</div>' +
+      ' &nbsp;·&nbsp; ' + esc(msg.sent_at) +
+      ' <a href="#" class="chat-msg-report" title="Save a cleartext report of this message for diagnosis">Report</a>' +
+      '</div>' +
       '<div class="chat-msg-body">' + esc(msg.body) + '</div>';
     thread.insertBefore(div, typing);
   }
@@ -272,7 +369,7 @@
         typing.style.display = data.typing ? '' : 'none';
         updateStopBtn(data.typing);
         if (data.typing) thread.scrollTop = thread.scrollHeight;
-        {% if view_mode != 'agenda' %}
+        {% if view_mode == 'day' or view_mode == 'week' %}
         /* refresh calendar when agent messages arrive or typing just finished */
         if (hasAgentMsg || (wasTyping && !data.typing)) {
           refreshCalendar();
@@ -334,6 +431,40 @@
   function updateStopBtn(isTyping) {
     if (stopBtn) stopBtn.style.display = isTyping ? '' : 'none';
   }
+
+  /* ── report a chat message ── */
+  thread.addEventListener('click', function (e) {
+    var link = e.target.closest('.chat-msg-report');
+    if (!link) return;
+    e.preventDefault();
+    var row = link.closest('.chat-msg');
+    if (!row || row.dataset.reported === '1') return;
+    var msgId = row.getAttribute('data-msg-id');
+    if (!msgId) return;
+    var reason = window.prompt(
+      'Optional: what was confusing or wrong about this message?\n' +
+      '(Leave blank to file a flag without a reason.)',
+      ''
+    );
+    if (reason === null) return;
+    var fd = new FormData();
+    fd.append('csrfmiddlewaretoken', csrf);
+    fd.append('message_id', msgId);
+    fd.append('reason', reason);
+    fetch('{% url "chat_report" %}', { method: 'POST', body: fd, credentials: 'same-origin' })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data && data.ok) {
+          row.dataset.reported = '1';
+          link.textContent = 'Reported ✓';
+          link.style.color = '#15803d';
+          link.style.pointerEvents = 'none';
+        } else {
+          alert((data && data.error) || 'Report failed.');
+        }
+      })
+      .catch(function () { alert('Report failed.'); });
+  });
 })();
 </script>
 

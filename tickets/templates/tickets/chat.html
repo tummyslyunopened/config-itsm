@@ -27,10 +27,11 @@
 
   <div class="chat-thread" id="chat-thread">
     {% for msg in messages %}
-    <div class="chat-msg">
+    <div class="chat-msg" data-msg-id="{{ msg.id }}">
       <div class="chat-msg-meta">
         <strong>{{ msg.sender.username }}</strong>
         &nbsp;·&nbsp;{{ msg.sent_at|date:"M d, H:i" }}
+        <a href="#" class="chat-msg-report" title="Save a cleartext report of this message for diagnosis">Report</a>
       </div>
       <div class="chat-msg-body">{{ msg.body }}</div>
     </div>
@@ -77,9 +78,12 @@
 
       var div = document.createElement('div');
       div.className = 'chat-msg';
+      div.setAttribute('data-msg-id', msg.id);
       div.innerHTML =
         '<div class="chat-msg-meta"><strong>' + esc(msg.sender) + '</strong>' +
-        ' &nbsp;·&nbsp; ' + esc(msg.sent_at) + '</div>' +
+        ' &nbsp;·&nbsp; ' + esc(msg.sent_at) +
+        ' <a href="#" class="chat-msg-report" title="Save a cleartext report of this message for diagnosis">Report</a>' +
+        '</div>' +
         '<div class="chat-msg-body">' + esc(msg.body) + '</div>';
 
       // Insert before the typing indicator so it stays at the bottom
@@ -162,6 +166,41 @@
     function updateStopBtn(isTyping) {
       if (stopBtn) stopBtn.style.display = isTyping ? '' : 'none';
     }
+
+    /* ── report a chat message ── */
+    thread.addEventListener('click', function (e) {
+      var link = e.target.closest('.chat-msg-report');
+      if (!link) return;
+      e.preventDefault();
+      var row = link.closest('.chat-msg');
+      if (!row || row.dataset.reported === '1') return;
+      var msgId = row.getAttribute('data-msg-id');
+      if (!msgId) return;
+      var reason = window.prompt(
+        'Optional: what was confusing or wrong about this message?\n' +
+        '(Leave blank to file a flag without a reason.)',
+        ''
+      );
+      if (reason === null) return;
+      var fd = new FormData();
+      fd.append('csrfmiddlewaretoken', csrf);
+      fd.append('message_id', msgId);
+      fd.append('reason', reason);
+      if (engId) fd.append('engineer_id', engId);
+      fetch('{% url "chat_report" %}', { method: 'POST', body: fd, credentials: 'same-origin' })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          if (data && data.ok) {
+            row.dataset.reported = '1';
+            link.textContent = 'Reported ✓';
+            link.style.color = '#15803d';
+            link.style.pointerEvents = 'none';
+          } else {
+            alert((data && data.error) || 'Report failed.');
+          }
+        })
+        .catch(function () { alert('Report failed.'); });
+    });
   })();
   </script>
 
