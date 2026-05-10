@@ -7,12 +7,19 @@
 </div>
 
 {% if agents %}
+<div class="card" style="color:#475569;margin-bottom:1rem;">
+  Your highest-priority agent (lowest number) is automatically the
+  <strong>scheduler</strong> — the only agent that writes to your calendar.
+  All other agents are suggesters that post proposals to group chat.
+</div>
+
 <div class="table-scroll">
 <table>
   <thead>
     <tr>
       <th>Priority</th>
       <th>Name</th>
+      <th>Role</th>
       <th>Status</th>
       <th></th>
     </tr>
@@ -22,6 +29,13 @@
     <tr>
       <td>{{ agent.priority }}</td>
       <td><a href="{% url 'agent_chat' agent.pk %}">{{ agent.name }}</a></td>
+      <td>
+        {% if agent.is_scheduler %}
+          <span class="badge badge-complete" title="Writes the calendar">Scheduler</span>
+        {% else %}
+          <span class="badge" style="background:#e2e8f0;color:#475569;" title="Suggestions only">Suggester</span>
+        {% endif %}
+      </td>
       <td>
         <span class="badge {% if agent.status == 'committed' %}badge-complete{% else %}badge-in_progress{% endif %}">
           {{ agent.status }}

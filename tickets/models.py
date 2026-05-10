@@ -163,6 +163,19 @@ class Agent(models.Model):
     def __str__(self):
         return f'{self.name} ({self.engineer.username})'
 
+    @property
+    def is_scheduler(self):
+        """The highest-priority (lowest priority number) agent for an engineer is
+        automatically the scheduler. Ties cannot occur due to unique_together."""
+        min_priority = (
+            type(self).objects
+            .filter(engineer_id=self.engineer_id)
+            .order_by('priority')
+            .values_list('priority', flat=True)
+            .first()
+        )
+        return min_priority is not None and self.priority == min_priority
+
 
 class AgentMessage(models.Model):
     USER = 'user'

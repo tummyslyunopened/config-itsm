@@ -2,7 +2,8 @@ import anthropic
 import threading
 from datetime import date, timedelta
 from django.contrib.auth.models import User
-from django.db import connection
+from django.db import connection, transaction
+from django.db.models import F
 from django.shortcuts import render, get_object_or_404, redirect
 from django.contrib.auth.decorators import login_required
 from django.http import HttpResponseForbidden, JsonResponse
@@ -753,6 +754,32 @@ def _provision_agent_ops_user(name):
     return ops_user
 
 
+def _shift_agents_to_make_room(engineer, target_priority, exclude_pk=None):
+    """Free up `target_priority` for `engineer` by pushing the contiguous block
+    of agents at priorities target, target+1, target+2, ... each down by one.
+    Stops at the first gap. Shifts in descending priority order so the unique
+    `(engineer, priority)` constraint never trips mid-update.
+    Returns the list of priorities that were shifted (low→high)."""
+    qs = Agent.objects.filter(engineer=engineer, priority__gte=target_priority)
+    if exclude_pk is not None:
+        qs = qs.exclude(pk=exclude_pk)
+    occupied = list(qs.order_by('priority').values_list('id', 'priority'))
+
+    to_shift = []
+    expected = target_priority
+    for pk, prio in occupied:
+        if prio == expected:
+            to_shift.append((pk, prio))
+            expected += 1
+        else:
+            break
+
+    for pk, _ in reversed(to_shift):
+        Agent.objects.filter(pk=pk).update(priority=F('priority') + 1)
+
+    return [prio for _, prio in to_shift]
+
+
 @require_role('engineer')
 def agent_list(request):
     agents = Agent.objects.filter(engineer=request.user).order_by('priority')
@@ -771,19 +798,20 @@ def agent_create(request):
             error = 'Name is required.'
         elif not system_prompt:
             error = 'System prompt is required.'
-        elif not priority_raw.isdigit():
+        elif not priority_raw.isdigit() or int(priority_raw) < 1:
             error = 'Priority must be a positive integer.'
-        elif Agent.objects.filter(engineer=request.user, priority=int(priority_raw)).exists():
-            error = f'You already have an agent with priority {priority_raw}.'
         else:
-            ops_user = _provision_agent_ops_user(name)
-            Agent.objects.create(
-                engineer=request.user,
-                ops_user=ops_user,
-                name=name,
-                system_prompt=system_prompt,
-                priority=int(priority_raw),
-            )
+            target = int(priority_raw)
+            with transaction.atomic():
+                _shift_agents_to_make_room(request.user, target)
+                ops_user = _provision_agent_ops_user(name)
+                Agent.objects.create(
+                    engineer=request.user,
+                    ops_user=ops_user,
+                    name=name,
+                    system_prompt=system_prompt,
+                    priority=target,
+                )
             return redirect('agents_list')
 
     return render(request, 'tickets/agents_create.html', {'error': error})
@@ -827,20 +855,22 @@ def agent_edit(request, pk):
             error = 'Name is required.'
         elif not system_prompt:
             error = 'System prompt is required.'
-        elif not priority_raw.isdigit():
+        elif not priority_raw.isdigit() or int(priority_raw) < 1:
             error = 'Priority must be a positive integer.'
-        elif (
-            Agent.objects
-            .filter(engineer=request.user, priority=int(priority_raw))
-            .exclude(pk=agent.pk)
-            .exists()
-        ):
-            error = f'You already have an agent with priority {priority_raw}.'
         else:
-            agent.name = name
-            agent.system_prompt = system_prompt
-            agent.priority = int(priority_raw)
-            agent.save()
+            target = int(priority_raw)
+            with transaction.atomic():
+                if target != agent.priority:
+                    # Park the edited agent off the priority axis so the shift
+                    # cannot collide with its current slot, then reinsert.
+                    Agent.objects.filter(pk=agent.pk).update(priority=-agent.pk)
+                    _shift_agents_to_make_room(
+                        request.user, target, exclude_pk=agent.pk,
+                    )
+                agent.name = name
+                agent.system_prompt = system_prompt
+                agent.priority = target
+                agent.save()
             return redirect('agents_list')
 
     return render(request, 'tickets/agents_edit.html', {'agent': agent, 'error': error})
@@ -857,6 +887,44 @@ def agent_suggest_prompt(request):
 
     existing_prompt = request.POST.get('existing_prompt', '').strip()
     user_prompt = request.POST.get('user_prompt', '').strip()
+
+    # Determine whether this agent will be the scheduler given its priority.
+    # The agent with the lowest priority number per engineer is the scheduler;
+    # all others are suggesters.
+    priority_raw = request.POST.get('priority', '').strip()
+    try:
+        priority = int(priority_raw)
+    except ValueError:
+        priority = None
+    agent_pk_raw = request.POST.get('agent_pk', '').strip()
+    agent_pk = int(agent_pk_raw) if agent_pk_raw.isdigit() else None
+    will_be_scheduler = False
+    if priority is not None:
+        others = Agent.objects.filter(engineer=request.user)
+        if agent_pk:
+            others = others.exclude(pk=agent_pk)
+        other_min = others.order_by('priority').values_list('priority', flat=True).first()
+        will_be_scheduler = other_min is None or priority < other_min
+
+    if will_be_scheduler:
+        role_section = (
+            "ROLE: This agent is the SCHEDULER for the engineer (highest-priority agent). "
+            "It is the ONLY agent that may write entries to the calendar. The system "
+            "prompt must explicitly state that this agent owns the schedule: it reads "
+            "every other agent's SUGGESTION...END block from group chat in priority "
+            "order, then commits a single PLAN...END block — creating tickets and "
+            "ScheduleEntry rows — for the day. Do not describe domain-specific "
+            "scheduling that overlaps suggesters' domains; the scheduler's job is "
+            "synthesis and conflict resolution, not domain expertise.\n"
+        )
+    else:
+        role_section = (
+            "ROLE: This agent is a SUGGESTER. It posts SUGGESTION...END proposals to "
+            "the engineer's group chat — it CANNOT write to the calendar. A separate "
+            "scheduler agent (the highest-priority agent for this engineer) reads "
+            "everyone's suggestions and decides the final plan. The system prompt "
+            "must reflect that this agent only proposes and never schedules directly.\n"
+        )
 
     # Build a human-readable work schedule for the engineer
     try:
@@ -888,18 +956,20 @@ SPECIFIC INSTRUCTIONS FROM THE USER (follow these closely):
 
     meta = f"""Rewrite the system prompt for an AI scheduling assistant named "{name}".
 
-Context: this agent runs inside a multi-agent ITSM calendar system. Several agents (each with a different domain) collaborate to fill an engineer's workday with scheduled blocks. Each agent has an integer priority; lower = higher priority. Higher-priority agents claim time slots first; lower-priority ones must work around them.
+Context: this agent runs inside a multi-agent ITSM calendar system. Several agents (each with a different domain) collaborate to fill an engineer's workday with scheduled blocks. Each agent has an integer priority; lower = higher priority. The single highest-priority agent per engineer is automatically the SCHEDULER (the only agent that writes to the calendar); all others are SUGGESTERS that post proposals to group chat.
 
+{role_section}
 ENGINEER'S WORKING HOURS:
 {work_hours_text}
 {existing_section}{instructions_section}
 The system prompt you produce must:
-1. Clearly state the agent's domain (what kinds of activities it schedules and why they matter).
-2. Give 3–5 concrete example activity titles this agent would create, with realistic times drawn from the engineer's actual working hours above.
-3. Specify sensible default durations (e.g. "30-minute", "1-hour").
-4. Explicitly reference the engineer's working days and hours so the agent knows when it can schedule.
-5. Tell the agent to move its own blocks rather than overlap a higher-priority agent's blocks.
-6. Be specific and decisive — no vague placeholders.
+1. Open by naming this agent's role (scheduler or suggester) and what that means for its outputs.
+2. Clearly state the agent's domain (what kinds of activities it covers and why they matter).
+3. Give 3–5 concrete example activity titles, with realistic times drawn from the engineer's actual working hours above.
+4. Specify sensible default durations (e.g. "30-minute", "1-hour").
+5. Explicitly reference the engineer's working days and hours so the agent knows when it can schedule.
+6. For suggesters: tell the agent to defer to higher-priority suggestions and yield rather than overlap them. For the scheduler: tell the agent to weigh suggestions in priority order and resolve conflicts.
+7. Be specific and decisive — no vague placeholders.
 
 Write only the system prompt itself (150–250 words). No title, no preamble."""
 
