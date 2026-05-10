@@ -8,8 +8,8 @@
   <div class="calendar-main">
 
     {# Header row #}
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.75rem;flex-shrink:0;">
-      <div style="display:flex;align-items:center;gap:1rem;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.75rem;flex-shrink:0;flex-wrap:wrap;gap:.5rem;">
+      <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap;">
         <h1 style="margin:0;font-size:18px;">Calendar</h1>
         {% if view_mode == 'day' or view_mode == 'week' %}
         <a href="{{ prev_nav }}" class="btn btn-outline btn-sm">←</a>
