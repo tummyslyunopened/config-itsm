@@ -291,11 +291,18 @@ def ticket_schedule(request, pk):
                 status=400,
             )
 
-    # Derive agent from API key's user; null if no agent record (plain ops user)
+    # Derive agent from API key's user; null if no agent record (plain ops user).
+    # Only the scheduler agent for the engineer may write to the schedule.
     try:
         agent = Agent.objects.get(ops_user=request.api_user)
     except Agent.DoesNotExist:
         agent = None
+
+    if agent is not None and not agent.is_scheduler:
+        return JsonResponse(
+            {'error': 'only the scheduler agent can edit the schedule; this agent is suggester-only'},
+            status=403,
+        )
 
     entry = ScheduleEntry.objects.create(
         ticket=ticket, engineer=engineer, start=start_dt, end=end_dt,
@@ -389,6 +396,12 @@ def agent_clear_future_schedule(request, agent_id):
         agent = Agent.objects.get(pk=agent_id, ops_user=request.api_user)
     except Agent.DoesNotExist:
         return JsonResponse({'error': 'agent not found'}, status=404)
+
+    if not agent.is_scheduler:
+        return JsonResponse(
+            {'error': 'only the scheduler agent can clear schedule entries'},
+            status=403,
+        )
 
     now = timezone.now()
     deleted, _ = ScheduleEntry.objects.filter(

@@ -128,9 +128,10 @@ One row per agent instance. Agents belong to a single engineer and are created b
 | `priority`     | IntegerField                | Unique per engineer. Lower number = higher priority.          |
 | `status`       | CharField(choices)          | `deliberating` / `committed`                                  |
 | `document`     | TextField                   | Agent's private running notes; never shown to the engineer    |
+| `is_scheduler` | BooleanField(default=False) | Exactly one agent per engineer may have this set. The scheduler is the only agent that writes `ScheduleEntry` records; all other agents post suggestions to group chat. |
 | `created_at`   | DateTimeField(auto_now_add) |                                                               |
 
-Unique together: `(engineer, priority)`.
+Unique together: `(engineer, priority)`. Partial unique constraint: at most one row per engineer with `is_scheduler=True`.
 
 ### AgentMessage
 One message in a one-on-one chat between an agent and its engineer. This chat is for updating the agent's priorities only; it does not produce schedule changes directly.
@@ -169,6 +170,7 @@ Ordered by `sent_at` ascending.
 | View own agents list and one-on-one chats                   | ✗   | ✓        |
 | Post to own agent's one-on-one chat                         | ✗   | ✓        |
 | Trigger "commit to state" on own agent                      | ✗   | ✓        |
+| Designate which of own agents is the scheduler              | ✗   | ✓        |
 
 There is no ticket ownership. Any engineer can change status or log time on any ticket. An engineer can only delete their own time entries.
 
@@ -177,6 +179,15 @@ There is no ticket ownership. Any engineer can change status or log time on any 
 ## AI Agents
 
 AI agents authenticate with an **API key** rather than a browser session. Each API key is linked to an ops-role user account and grants identical permissions to a human ops user.
+
+### Roles
+
+Each engineer's agents split into two roles:
+
+- **Scheduler** (`is_scheduler=True`) — exactly one per engineer. The only agent that can create or delete `ScheduleEntry` records. Reads suggester proposals from group chat plus its own context, then commits a final plan to the calendar.
+- **Suggester** (`is_scheduler=False`) — all other agents. Domain experts that post proposals to the engineer's group chat. They cannot write to the schedule.
+
+The engineer designates the scheduler from the agent edit page; setting an agent as scheduler atomically unsets any other scheduler for that engineer. Until a scheduler is designated, no agent can write to the calendar — suggesters will still post to chat.
 
 ### API Key Model
 
@@ -207,12 +218,12 @@ All agent endpoints return JSON. They accept JSON request bodies where input is 
 | POST   | `/api/tickets/<id>/status/`                   | Change ticket status (`status` field)                                                                                                |
 | GET    | `/api/engineers/`                             | List all engineer users and their work schedules                                                                                     |
 | GET    | `/api/engineers/<id>/schedule/`               | Schedule entries for one engineer (`?date=YYYY-MM-DD` for a single day or `?week=YYYY-MM-DD` for the week containing that date); includes `created_by` and `locked` per entry |
-| POST   | `/api/tickets/<id>/schedule/`                 | Add a schedule entry (`engineer_id`, `date`, `start`, `end`); `created_by` is derived from the API key — the calling agent is the owner |
+| POST   | `/api/tickets/<id>/schedule/`                 | Add a schedule entry (`engineer_id`, `date`, `start`, `end`); `created_by` is derived from the API key — the calling agent is the owner. **Rejected with 403 if the calling agent is a suggester (`is_scheduler=False`).** |
 | GET    | `/api/engineers/<id>/chat/`                   | All non-hidden messages in an engineer's group chat, ordered oldest-first                                                            |
 | POST   | `/api/engineers/<id>/chat/`                   | Post a message to an engineer's group chat (`body` field); sender is the API key's linked ops user                                   |
 | GET    | `/api/agents/<agent_id>/state/`               | Read an agent's `status` and `document`                                                                                              |
 | PUT    | `/api/agents/<agent_id>/state/`               | Update an agent's `status` and/or `document` (either or both fields)                                                                |
-| DELETE | `/api/agents/<agent_id>/schedule/future/`     | Delete all non-locked schedule entries created by this agent for its engineer where `start > now`                                    |
+| DELETE | `/api/agents/<agent_id>/schedule/future/`     | Delete all non-locked schedule entries created by this agent for its engineer where `start > now`. **Rejected with 403 unless the agent is the scheduler.** |
 
 Time values in request/response bodies use `HH:MM` format (24-hour). All datetimes are in the server's local timezone.
 
@@ -228,33 +239,38 @@ The engineer can influence the document indirectly by chatting with the agent in
 
 ### Agent Cycle
 
-Each engineer has their own set of personal agents. The scheduling cycle is run independently per engineer, using only that engineer's agents ordered by their priority.
-
-The message trigger includes two additional pre-cycle steps: removal detection and relevance filtering.
+Each engineer has their own set of personal agents. The scheduling cycle is run independently per engineer. Suggester agents propose ideas to the group chat in priority order, then the single scheduler agent reads everyone's suggestions and commits a final plan to the calendar.
 
 ```
 TRIGGER: new chat   — fires for the engineer whose group chat received the message
 
 ═══════════════════════════════════════════════════════
-MESSAGE TRIGGER ONLY — BROADCAST CHECK
+PRE-CYCLE — SCHEDULER CHECK
+  Look up the engineer's scheduler agent (is_scheduler=True).
+  If none exists:
+    Post a system message to the group chat asking the engineer
+    to designate one. Skip the cycle entirely. Suggesters do not
+    run because their suggestions cannot be acted on.
+
+MESSAGE TRIGGER ONLY — BROADCAST CHECK (suggesters only)
   If the message explicitly addresses all agents
   ("all agents", "every agent", "all of you"):
-    All agents are marked relevant. Skip self-evaluation.
+    All suggesters are marked relevant. Skip self-evaluation.
   Otherwise:
-    Each agent independently reads the new message.
+    Each suggester independently reads the new message.
     Asks Claude: "Is this relevant to my domain?"
     Not relevant → status: committed, no further action.
-    Relevant     → continues below.
+    Relevant     → joins the suggester pool for this cycle.
+  The scheduler always engages whenever a cycle runs.
 
-MESSAGE TRIGGER ONLY — REMOVAL CHECK
-  Each relevant agent asks Claude:
-    "Is this message asking me to remove/cancel/delete my entries?"
+MESSAGE TRIGGER ONLY — REMOVAL CHECK (scheduler only)
+  Scheduler asks Claude:
+    "Is this message asking to remove, cancel, clear, or delete
+     scheduled entries?"
   If YES:
-    Agent deletes its own entries for the target date(s).
-    Agent posts a confirmation message to group chat.
-    Agent status → committed. Does not enter scheduling cycle.
-  If NO:
-    Agent enters the scheduling cycle below.
+    Scheduler deletes its own non-locked future entries for the
+    target date(s) and posts a confirmation to group chat.
+    All agents → status: committed. Cycle ends.
 
 MESSAGE TRIGGER ONLY — DATE PARSING
   Target dates are extracted from the message:
@@ -272,38 +288,34 @@ MESSAGE TRIGGER ONLY — DATE PARSING
 For each target date:
 
 1. RESET
-   All (relevant) agents → status: deliberating.
-   Each agent deletes its own non-locked ScheduleEntry records
+   Scheduler deletes its own non-locked ScheduleEntry records
    for this engineer on this specific date where start > now.
+   Locked entries (manual ops entries) are never touched.
 
-2. PROPOSAL PASS  (all agents, any order)
-   Each agent reads its document, the engineer's full non-hidden
-   group chat history, and the current DB schedule for the date.
-   Posts proposed time blocks to the engineer's group chat.
-   The current DB schedule is shown as authoritative context.
+2. SUGGESTION PASS  (suggesters only, priority order)
+   Each suggester → status: deliberating.
+   Suggester reads its document, the engineer's full non-hidden
+   group chat history, the current DB schedule for the date, and
+   the engineer's work hours. Posts a SUGGESTION...END block to
+   the group chat. Suggester does NOT write to the schedule.
+   After posting, suggester → status: committed.
 
-3. RESOLUTION PASS  (lowest priority → highest priority)
-   Each agent queries the DB for entries on this date from other
-   agents and locked entries — this is the authoritative source.
-   Chat proposals are only consulted for agents that have not yet
-   committed to the DB in this cycle (same-cycle coordination).
-   Posts a revised proposal to group chat.
+3. SCHEDULE PASS  (scheduler only)
+   Scheduler → status: deliberating.
+   Scheduler reads the latest SUGGESTION...END block from each
+   suggester this cycle (in priority order — lower number first),
+   the chat history, the current DB schedule, the locked entries,
+   and the engineer's work hours.
+   Decides the final time blocks, creates tickets and ScheduleEntry
+   records (created_by=<scheduler>, locked=False). Updates its
+   document. Status → committed.
+   Blocks outside the engineer's work hours or overlapping locked
+   entries are skipped.
 
-4. COMMIT PASS  (highest priority → lowest priority)
-   Each agent reads the PROPOSAL...END block from its latest
-   revised proposal (only that block — context text is excluded).
-   Creates tickets and ScheduleEntry records (created_by=<agent>,
-   locked=False). Updates its document. Status → committed.
-   Blocks outside the engineer's work hours are skipped.
-
-5. CONFLICT CLEANUP  (lowest priority → highest priority)
-   Each agent deletes its own entries for this date that overlap
-   with locked entries or entries from higher-priority agents.
-
-6. All agents reach committed. Cycle complete for this date.
+4. All agents reach committed. Cycle complete for this date.
 ```
 
-Agents may only schedule within the engineer's `WorkSchedule` hours for that day, regardless of trigger time. Manually created schedule entries (`locked=True`, `created_by=null`) are never moved or deleted by agents.
+Only the scheduler may write `ScheduleEntry` rows, and only within the engineer's `WorkSchedule` hours for that day. Manually created schedule entries (`locked=True`, `created_by=null`) are never moved or deleted by any agent.
 
 ### Agent Code Structure
 
@@ -314,6 +326,7 @@ agents/
   base.py              GenericAgent class
                          Initialised with an Agent DB record.
                          Claude API client (api key from environment).
+                         is_scheduler property
                          Shared methods:
                            get_chat_history(engineer_id)
                              — excludes hidden=True messages
@@ -325,24 +338,28 @@ agents/
                              — includes created_by via select_related
                            get_work_hours(engineer_id, for_date)
                            clear_future_entries(engineer_id, for_date=None)
-                             — scoped to for_date when provided
-                           delete_conflicting_own_entries(engineer_id, for_date)
-                             — removes own entries that overlap higher-priority
-                               or locked entries committed to DB
+                             — scheduler-only; no-op for suggesters
                            create_ticket(title, description) → ticket_id
                            schedule_ticket(ticket_id, engineer_id, start_dt, end_dt)
+                             — scheduler-only; raises PermissionError
+                               if called on a suggester
                            is_relevant(message) → bool
                            is_removal_directive(message) → bool
+                         Suggester pass:
+                           suggest(engineer_id, for_date)
+                             — posts SUGGESTION...END block to group chat
+                         Scheduler-only methods:
                            cancel_entries(engineer_id, for_date)
-                             — clears entries + posts confirmation to chat
-                           propose(engineer_id, for_date)
-                           resolve(engineer_id, for_date)
-                             — uses DB entries as authoritative source;
-                               only consults chat proposals for agents
-                               not yet committed to DB this cycle
-                           commit(engineer_id, for_date)
-                             — extracts only from PROPOSAL...END block
+                             — clears own entries + posts confirmation
+                           schedule(engineer_id, for_date)
+                             — collects each suggester's latest
+                               SUGGESTION...END block in priority order,
+                               asks Claude for a final PLAN...END,
+                               extracts blocks, writes tickets +
+                               ScheduleEntry rows, updates document
                            commit_chat_to_document()
+                             — also available on suggesters; rewrites
+                               the agent's private notes from one-on-one chat
 
   runner.py            Orchestration
                          _parse_single_date(message) → date
@@ -350,12 +367,17 @@ agents/
                            — handles single day, weekday names,
                              "next week", "whole week", etc.
                          _all_agents_addressed(message) → bool
-                         _run_cycle(engineer_id, for_date, agents)
-                           — reset → propose → resolve → commit →
-                             conflict cleanup for one date
+                         _build_agents_for_engineer(engineer_id)
+                           → (scheduler, [suggesters])
+                             scheduler is None when none designated
+                         _run_cycle(engineer_id, for_date,
+                                    scheduler, suggesters)
+                           — reset → suggestion pass → schedule pass
                          on_message(engineer_id, message)
-                           — broadcast check → relevance/removal
-                             check → _run_cycle per date
+                           — scheduler-presence check → broadcast /
+                             relevance filter (suggesters) →
+                             scheduler removal check → _run_cycle
+                             per date
 ```
 
 ---
@@ -490,12 +512,14 @@ All `start` and `end` time fields across schedule entries, time entries, and wor
 
 ### Agent List — `/agents/`
 - Engineer only.
-- Lists all agents belonging to the logged-in engineer, showing name, priority, current status, and links to the chat and edit views.
+- Lists all agents belonging to the logged-in engineer, showing name, priority, role (Scheduler / Suggester), current status, and links to the chat and edit views.
+- A warning banner appears at the top when no agent is designated as the scheduler.
 - A **Create Agent** button links to `/agents/create/`.
 
 ### Create Agent — `/agents/create/`
 - Engineer only.
-- Form fields: `name`, `priority` (integer, unique among the engineer's agents), `system_prompt`.
+- Form fields: `name`, `priority` (integer, unique among the engineer's agents), `system_prompt`, `is_scheduler` (checkbox).
+- Checking `is_scheduler` while another agent already holds that role atomically transfers the role to the new agent.
 - A **Generate from name & instructions** button calls `/agents/suggest-prompt/` (AJAX). It sends the agent name, any text already in the system prompt field, and an optional free-text instructions box. The returned suggestion fills the system prompt textarea for review before saving.
 - On save, the system auto-provisions a dedicated ops `User`, `UserProfile`, and `ApiKey` for the new agent.
 - Redirects to `/agents/` after creation.
@@ -517,6 +541,7 @@ All `start` and `end` time fields across schedule entries, time entries, and wor
 
 ### Edit Agent — `/agents/<id>/edit/`
 - Engineer only. The engineer must own the agent.
-- Form fields: `name`, `priority`, `system_prompt`.
+- Form fields: `name`, `priority`, `system_prompt`, `is_scheduler` (checkbox).
+- Checking `is_scheduler` when another agent currently holds that role atomically transfers the role to this agent.
 - A **Regenerate from name, current prompt & instructions** button works identically to the one on the create form, pre-seeding the existing system prompt as the `existing_prompt` input.
 - Redirects to `/agents/` after saving.

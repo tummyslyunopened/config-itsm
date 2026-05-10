@@ -20,6 +20,10 @@ class GenericAgent:
             self._claude = anthropic.Anthropic(api_key=os.environ.get('ANTHROPIC_API_KEY') or None)
         return self._claude
 
+    @property
+    def is_scheduler(self):
+        return self._agent.is_scheduler
+
     # ── Group chat ────────────────────────────────────────────────────────────
 
     def get_chat_history(self, engineer_id):
@@ -68,6 +72,9 @@ class GenericAgent:
             return None, None
 
     def clear_future_entries(self, engineer_id, for_date=None):
+        """Scheduler-only operation: delete this agent's non-locked future entries."""
+        if not self._agent.is_scheduler:
+            return
         now = timezone.now()
         qs = ScheduleEntry.objects.filter(
             engineer_id=engineer_id,
@@ -79,28 +86,6 @@ class GenericAgent:
             qs = qs.filter(start__date=for_date)
         qs.delete()
 
-    def delete_conflicting_own_entries(self, engineer_id, for_date):
-        """Delete own entries for for_date that overlap with locked or higher-priority entries."""
-        from django.db.models import Q
-        own = list(ScheduleEntry.objects.filter(
-            engineer_id=engineer_id,
-            created_by=self._agent,
-            start__date=for_date,
-        ))
-        if not own:
-            return
-        blockers = list(ScheduleEntry.objects.filter(
-            engineer_id=engineer_id,
-            start__date=for_date,
-        ).filter(
-            Q(locked=True) | Q(created_by__priority__lt=self._agent.priority)
-        ).exclude(created_by=self._agent))
-        for entry in own:
-            for blocker in blockers:
-                if entry.start < blocker.end and entry.end > blocker.start:
-                    entry.delete()
-                    break
-
     # ── Tickets ───────────────────────────────────────────────────────────────
 
     def create_ticket(self, title, description):
@@ -108,6 +93,11 @@ class GenericAgent:
         return ticket.id
 
     def schedule_ticket(self, ticket_id, engineer_id, start_dt, end_dt):
+        """Scheduler-only operation: create a ScheduleEntry owned by this agent."""
+        if not self._agent.is_scheduler:
+            raise PermissionError(
+                f'Agent "{self._agent.name}" is a suggester and cannot edit the schedule.'
+            )
         ticket = Ticket.objects.get(pk=ticket_id)
         entry = ScheduleEntry.objects.create(
             ticket=ticket,
@@ -133,25 +123,28 @@ class GenericAgent:
         return answer.upper().startswith('Y')
 
     def is_removal_directive(self, message):
-        """True if the message is asking this agent to remove/cancel/delete its entries."""
+        """True if the message is asking the scheduler to remove/cancel/delete entries."""
         answer = self._ask_claude(
             f'{self._agent.system_prompt}\n\n'
-            f'Is this message asking you specifically to remove, cancel, clear, or delete your scheduled entries '
+            f'Is this message asking to remove, cancel, clear, or delete scheduled entries '
             f'(not add or reschedule them)?\n\nMessage: {message}\n\nAnswer YES or NO only.',
             max_tokens=5,
         )
         return answer.upper().startswith('Y')
 
     def cancel_entries(self, engineer_id, for_date):
-        """Delete own entries for for_date and post a confirmation to group chat."""
+        """Scheduler-only: delete own entries for for_date and confirm in chat."""
+        if not self._agent.is_scheduler:
+            return
         self.clear_future_entries(engineer_id, for_date=for_date)
         self.post_chat(
             engineer_id,
-            f"[{self._agent.name}] Got it — removed my scheduled entries for {for_date:%A, %B %d}.",
+            f"[{self._agent.name}] Got it — removed scheduled entries for {for_date:%A, %B %d}.",
         )
         self.write_status(Agent.COMMITTED)
 
-    def propose(self, engineer_id, for_date):
+    def suggest(self, engineer_id, for_date):
+        """Suggester pass: post a proposal to group chat. Does NOT write to DB."""
         document = self.read_document()
         history = self.get_chat_history(engineer_id)
         schedule = self.get_schedule(engineer_id, for_date)
@@ -165,13 +158,16 @@ class GenericAgent:
 
         schedule_text = '\n'.join(
             f"  {e.start:%H:%M}–{e.end:%H:%M}  #{e.ticket_id} {e.ticket.title}"
-            f"  [{'locked' if e.locked else 'agent'}]"
             for e in schedule
         ) or '(nothing scheduled)'
 
         prompt = f"""{self._agent.system_prompt}
 
 Today is {for_date:%A, %B %d %Y}. Engineer work hours: {work_hours}.
+
+You are a SUGGESTER. You can only post ideas to the group chat — you cannot
+edit the schedule. A separate scheduler agent reads everyone's suggestions
+and decides what actually goes on the calendar.
 
 YOUR PRIOR NOTES ON THIS ENGINEER:
 {document or '(none yet)'}
@@ -182,133 +178,121 @@ RECENT CHAT HISTORY:
 CURRENT SCHEDULE FOR TODAY:
 {schedule_text}
 
-Propose specific time blocks to schedule for this engineer today.
-Each block must fit within work hours and not overlap existing schedule entries.
+Post a clear, prioritised list of suggestions for what should be scheduled.
+Each suggestion should include a preferred time window, a title, an estimated
+duration, and a one-sentence rationale.
 Respond in exactly this format:
-PROPOSAL
+SUGGESTION
 - HH:MM–HH:MM | <title> | <one-sentence rationale>
 END"""
 
-        proposal = self._ask_claude(prompt, max_tokens=400)
+        suggestion = self._ask_claude(prompt, max_tokens=400)
         self.post_chat(
             engineer_id,
-            f"[{self._agent.name} — Proposal for {for_date:%b %d}]\n{proposal}",
+            f"[{self._agent.name} — Suggestion for {for_date:%b %d}]\n{suggestion}",
         )
-        self.write_status(Agent.DELIBERATING)
+        self.write_status(Agent.COMMITTED)
 
-    def resolve(self, engineer_id, for_date):
+    def schedule(self, engineer_id, for_date):
+        """Scheduler-only pass: read all suggestions, decide, write DB entries."""
+        if not self._agent.is_scheduler:
+            return
+
         history = self.get_chat_history(engineer_id)
         schedule = self.get_schedule(engineer_id, for_date)
         work_start, work_end = self.get_work_hours(engineer_id, for_date)
         work_hours = f"{work_start:%H:%M}–{work_end:%H:%M}" if work_start else 'not configured'
+        document = self.read_document()
 
-        own = next(
-            (m.body for m in reversed(history)
-             if m.sender_id == self._agent.ops_user_id and f'[{self._agent.name}' in m.body),
-            '(none)',
-        )
-
-        # DB entries from other agents — the authoritative source of truth
-        others_db = [
-            e for e in schedule
-            if not (e.created_by and e.created_by_id == self._agent.pk)
-        ]
-        agents_in_db = {e.created_by_id for e in others_db if e.created_by}
-
-        def _fmt(e):
-            label = 'locked' if e.locked else (e.created_by.name if e.created_by else 'unknown')
-            return f"  {e.start:%H:%M}–{e.end:%H:%M}  {e.ticket.title}  [{label}]"
-
-        higher_committed = [
-            _fmt(e) for e in others_db
-            if e.locked or (e.created_by and e.created_by.priority < self._agent.priority)
-        ]
-        lower_committed = [
-            _fmt(e) for e in others_db
-            if e.created_by and e.created_by.priority > self._agent.priority
-        ]
-
-        # Chat proposals only for agents NOT yet committed to DB (same-cycle coordination)
-        higher_pending, lower_pending = [], []
+        # Collect every other agent's most recent SUGGESTION...END block from chat,
+        # in priority order (highest priority first).
+        agents_by_user = {
+            a.ops_user_id: a for a in Agent.objects.filter(engineer_id=engineer_id)
+            if a.pk != self._agent.pk
+        }
+        latest_by_agent = {}
         for m in history:
-            if m.sender_id == self._agent.ops_user_id or 'PROPOSAL' not in m.body.upper():
+            if m.sender_id not in agents_by_user:
                 continue
-            other = Agent.objects.filter(ops_user_id=m.sender_id, engineer_id=engineer_id).first()
-            if other is None or other.pk in agents_in_db:
-                continue  # Already in DB — the DB entry is definitive, ignore this chat proposal
-            label = f"[{other.name} — proposed this cycle, not yet committed]\n{m.body}"
-            if other.priority < self._agent.priority:
-                higher_pending.append(label)
-            else:
-                lower_pending.append(label)
+            if 'SUGGESTION' not in m.body.upper():
+                continue
+            latest_by_agent[m.sender_id] = m.body
 
-        must_yield = higher_committed + higher_pending
-        may_override = lower_committed + lower_pending
+        ordered = sorted(
+            latest_by_agent.items(),
+            key=lambda item: agents_by_user[item[0]].priority,
+        )
+        suggestions_text = '\n\n'.join(
+            f"[{agents_by_user[uid].name} | priority {agents_by_user[uid].priority}]\n{body}"
+            for uid, body in ordered
+        ) or '(no suggestions this cycle)'
+
+        history_text = '\n'.join(
+            f"{m.sent_at:%Y-%m-%d %H:%M}  {m.sender.username}: {m.body}"
+            for m in history[-40:]
+        ) or '(no messages yet)'
+
+        existing_text = '\n'.join(
+            f"  {e.start:%H:%M}–{e.end:%H:%M}  #{e.ticket_id} {e.ticket.title}"
+            f"  [{'locked' if e.locked else 'agent'}]"
+            for e in schedule
+        ) or '(nothing scheduled)'
 
         prompt = f"""{self._agent.system_prompt}
 
-YOUR CURRENT PROPOSAL:
-{own}
+You are the SCHEDULER for this engineer. You are the only agent that can
+write to the calendar. The other agents are domain experts that posted
+suggestions to the group chat below; weigh them, then commit a final plan.
 
-COMMITTED ENTRIES FROM HIGHER-PRIORITY AGENTS — you MUST move your blocks away from these (these are from the database and are definitive):
-{chr(10).join(must_yield) if must_yield else '(none — you are the highest priority or no conflicts)'}
+Today is {for_date:%A, %B %d %Y}. Engineer work hours: {work_hours}.
 
-COMMITTED ENTRIES FROM LOWER-PRIORITY AGENTS — these yield to you, but avoid overlap anyway:
-{chr(10).join(may_override) if may_override else '(none)'}
+YOUR PRIOR NOTES:
+{document or '(none yet)'}
 
-WORK HOURS: {work_hours}
+CURRENT SCHEDULE FOR TODAY (locked entries from ops are immovable):
+{existing_text}
 
-Rules:
-- The committed entries above come from the live database. Do NOT plan around any agent's blocks that do not appear in this list — if an agent is not listed, their entries have been cancelled or do not exist.
-- Do NOT overlap any higher-priority block. Move your block to a different time instead.
-- If there is no free slot for a block, drop it entirely rather than overlap.
-- Keep all blocks within work hours.
+SUGGESTIONS FROM OTHER AGENTS (in priority order — lower number is higher priority):
+{suggestions_text}
 
-Revise your proposal to be fully conflict-free. If no conflicts exist, repeat it unchanged.
+RECENT CHAT HISTORY:
+{history_text}
+
+Decide the final time blocks to schedule for today. Respect:
+- All locked entries (do not overlap).
+- The engineer's working hours.
+- Higher-priority suggestions over lower-priority ones when they conflict.
+You may merge, drop, or shift suggestions. Do not invent activities outside
+the suggesters' domains unless the chat history explicitly asks for it.
 Respond in exactly this format:
-PROPOSAL
+PLAN
 - HH:MM–HH:MM | <title> | <one-sentence rationale>
 END"""
 
-        revised = self._ask_claude(prompt, max_tokens=500)
+        plan = self._ask_claude(prompt, max_tokens=600)
         self.post_chat(
             engineer_id,
-            f"[{self._agent.name} — Revised Proposal for {for_date:%b %d}]\n{revised}",
+            f"[{self._agent.name} — Final plan for {for_date:%b %d}]\n{plan}",
         )
 
-    def commit(self, engineer_id, for_date):
-        history = self.get_chat_history(engineer_id)
-        work_start, work_end = self.get_work_hours(engineer_id, for_date)
-        document = self.read_document()
+        plan_match = re.search(r'PLAN\s*\n(.*?)\nEND\b', plan, re.DOTALL | re.IGNORECASE)
+        plan_body = plan_match.group(1).strip() if plan_match else plan
 
-        own = next(
-            (m.body for m in reversed(history)
-             if m.sender_id == self._agent.ops_user_id and f'[{self._agent.name}' in m.body),
-            None,
-        )
-        if not own:
-            self.write_status(Agent.COMMITTED)
-            return
-
-        # Extract only the PROPOSAL...END block to avoid picking up context text that
-        # mentions other agents' blocks (which would create tickets for them by accident).
-        proposal_match = re.search(r'PROPOSAL\s*\n(.*?)\nEND\b', own, re.DOTALL | re.IGNORECASE)
-        proposal_body = proposal_match.group(1).strip() if proposal_match else own
-
-        extract_prompt = f"""Extract scheduled activities from this agent proposal and return a JSON array.
+        extract_prompt = f"""Extract scheduled activities from this plan and return a JSON array.
 Each object must have exactly these keys: "title" (string), "start" (HH:MM), "end" (HH:MM), "description" (string — 1-2 sentences explaining what this block is for and why).
 Return only valid JSON — no markdown, no explanation.
 
-PROPOSAL:
-{proposal_body}
+PLAN:
+{plan_body}
 
-Example: [{{"title": "Morning stretch", "start": "09:00", "end": "09:15", "description": "Light mobility work to start the day and reduce back tension before desk work."}}]"""
+Example: [{{"title": "Morning stretch", "start": "09:00", "end": "09:15", "description": "Light mobility work to start the day."}}]"""
 
-        raw = self._ask_claude(extract_prompt, max_tokens=500)
+        raw = self._ask_claude(extract_prompt, max_tokens=600)
 
         committed = []
         try:
             blocks = json.loads(raw)
+            existing_ranges = [(e.start, e.end) for e in schedule if e.locked]
             for block in blocks:
                 s = datetime.strptime(block['start'], '%H:%M').time()
                 e = datetime.strptime(block['end'], '%H:%M').time()
@@ -317,7 +301,11 @@ Example: [{{"title": "Morning stretch", "start": "09:00", "end": "09:15", "descr
                         continue
                 start_dt = datetime.combine(for_date, s)
                 end_dt = datetime.combine(for_date, e)
-                description = block.get('description') or f"Scheduled by {self._agent.name} on {for_date:%Y-%m-%d}."
+                if any(start_dt < lend and end_dt > lstart for lstart, lend in existing_ranges):
+                    continue
+                description = block.get('description') or (
+                    f"Scheduled by {self._agent.name} on {for_date:%Y-%m-%d}."
+                )
                 ticket_id = self.create_ticket(
                     title=block['title'],
                     description=description,
@@ -327,10 +315,6 @@ Example: [{{"title": "Morning stretch", "start": "09:00", "end": "09:15", "descr
         except (json.JSONDecodeError, KeyError, ValueError):
             pass
 
-        history_text = '\n'.join(
-            f"{m.sent_at:%Y-%m-%d %H:%M}  {m.sender.username}: {m.body}"
-            for m in history[-10:]
-        )
         update_prompt = f"""{self._agent.system_prompt}
 
 Update your running notes on this engineer.
@@ -342,7 +326,7 @@ TODAY ({for_date:%Y-%m-%d}) YOU COMMITTED:
 {json.dumps(committed, indent=2) if committed else '(nothing scheduled this run)'}
 
 RECENT CHAT (last 10 messages):
-{history_text}
+{chr(10).join(f"{m.sent_at:%Y-%m-%d %H:%M}  {m.sender.username}: {m.body}" for m in history[-10:])}
 
 Write updated notes in plain text (under 400 words)."""
 

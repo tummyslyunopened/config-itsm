@@ -6,13 +6,23 @@
   <a href="{% url 'agent_create' %}" class="btn btn-primary">+ Create Agent</a>
 </div>
 
+{% if agents and not has_scheduler %}
+<div class="card" style="border-color:#fdba74;background:#fff7ed;color:#9a3412;margin-bottom:1rem;">
+  None of your agents are designated as the scheduler. Until one is, no agent
+  can write to your calendar — others will only post suggestions to chat.
+  Edit an agent to make it the scheduler.
+</div>
+{% endif %}
+
 {% if agents %}
+
 <div class="table-scroll">
 <table>
   <thead>
     <tr>
       <th>Priority</th>
       <th>Name</th>
+      <th>Role</th>
       <th>Status</th>
       <th></th>
     </tr>
@@ -22,6 +32,13 @@
     <tr>
       <td>{{ agent.priority }}</td>
       <td><a href="{% url 'agent_chat' agent.pk %}">{{ agent.name }}</a></td>
+      <td>
+        {% if agent.is_scheduler %}
+          <span class="badge badge-complete" title="Writes the calendar">Scheduler</span>
+        {% else %}
+          <span class="badge" style="background:#e2e8f0;color:#475569;" title="Suggestions only">Suggester</span>
+        {% endif %}
+      </td>
       <td>
         <span class="badge {% if agent.status == 'committed' %}badge-complete{% else %}badge-in_progress{% endif %}">
           {{ agent.status }}

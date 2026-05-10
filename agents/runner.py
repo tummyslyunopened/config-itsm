@@ -2,7 +2,7 @@ import logging
 import re
 from datetime import date, timedelta
 
-from tickets.models import Agent
+from tickets.models import Agent, ChatMessage
 from .base import GenericAgent
 
 logger = logging.getLogger(__name__)
@@ -50,95 +50,124 @@ def _all_agents_addressed(message):
     return bool(re.search(r'\ball agents?\b|\bevery agent\b|\ball of you\b', msg))
 
 
-def _run_cycle(engineer_id, for_date, agents):
-    """Run propose → resolve → commit for a list of GenericAgent instances on one date."""
-    # RESET — scoped to for_date so multi-day loops don't wipe each other
-    for agent in agents:
-        try:
-            agent.clear_future_entries(engineer_id, for_date=for_date)
-            agent.write_status(Agent.DELIBERATING)
-        except Exception:
-            logger.exception(f'Reset failed for agent / engineer {engineer_id} / {for_date}')
-
-    # PROPOSAL PASS
-    for agent in agents:
-        try:
-            agent.propose(engineer_id, for_date)
-        except Exception:
-            logger.exception(f'Proposal failed for agent / engineer {engineer_id} / {for_date}')
-
-    # RESOLUTION PASS — lowest priority yields first
-    for agent in reversed(agents):
-        try:
-            agent.resolve(engineer_id, for_date)
-        except Exception:
-            logger.exception(f'Resolution failed for agent / engineer {engineer_id} / {for_date}')
-
-    # COMMIT PASS — highest priority commits first
-    for agent in agents:
-        try:
-            agent.commit(engineer_id, for_date)
-        except Exception:
-            logger.exception(f'Commit failed for agent / engineer {engineer_id} / {for_date}')
-
-    # CONFLICT CLEANUP — delete lower-priority entries that overlap higher-priority ones
-    for agent in reversed(agents):
-        try:
-            agent.delete_conflicting_own_entries(engineer_id, for_date)
-        except Exception:
-            logger.exception(f'Conflict cleanup failed for agent / engineer {engineer_id} / {for_date}')
+def _post_system_chat(engineer_id, body):
+    """Post a non-agent system message to the engineer's group chat.
+    Used for runner-level errors when no specific agent owns the failure."""
+    from django.contrib.auth.models import User
+    from django.db.models import Q
+    sender = (
+        User.objects
+        .filter(Q(is_superuser=True) | Q(profile__role='ops'))
+        .order_by('-is_superuser', 'pk')
+        .first()
+    )
+    if sender is None:
+        return
+    ChatMessage.objects.create(engineer_id=engineer_id, sender=sender, body=body)
 
 
 def _build_agents_for_engineer(engineer_id):
-    """Return [GenericAgent, ...] ordered by priority (lowest number = highest priority)."""
+    """Return (scheduler, [suggesters]) for an engineer.
+
+    Suggesters are returned in priority order (lowest number first). Scheduler
+    is None if the engineer has not designated one."""
     records = list(Agent.objects.filter(engineer_id=engineer_id).order_by('priority'))
-    result = []
+    scheduler = None
+    suggesters = []
     for record in records:
         try:
-            result.append(GenericAgent(record))
+            agent = GenericAgent(record)
         except Exception:
             logger.exception(f'Failed to initialise agent {record.id} for engineer {engineer_id}')
-    return result
+            continue
+        if record.is_scheduler and scheduler is None:
+            scheduler = agent
+        else:
+            suggesters.append(agent)
+    return scheduler, suggesters
+
+
+def _run_cycle(engineer_id, for_date, scheduler, suggesters):
+    """Run suggestion → scheduling for one date.
+
+    Suggesters post proposals to chat; the scheduler reads them and writes
+    ScheduleEntry records."""
+    # RESET — only the scheduler clears its own non-locked future entries.
+    try:
+        scheduler.clear_future_entries(engineer_id, for_date=for_date)
+    except Exception:
+        logger.exception(f'Reset failed for scheduler / engineer {engineer_id} / {for_date}')
+
+    # SUGGESTION PASS — every suggester posts to chat (priority order).
+    for agent in suggesters:
+        try:
+            agent.write_status(Agent.DELIBERATING)
+            agent.suggest(engineer_id, for_date)
+        except Exception:
+            logger.exception(f'Suggestion failed for engineer {engineer_id} / {for_date}')
+            try:
+                agent.write_status(Agent.COMMITTED)
+            except Exception:
+                pass
+
+    # SCHEDULE PASS — scheduler reads suggestions, writes DB entries.
+    try:
+        scheduler.write_status(Agent.DELIBERATING)
+        scheduler.schedule(engineer_id, for_date)
+    except Exception:
+        logger.exception(f'Schedule pass failed for engineer {engineer_id} / {for_date}')
+        try:
+            scheduler.write_status(Agent.COMMITTED)
+        except Exception:
+            pass
 
 
 def on_message(engineer_id, message):
     """Triggered when an engineer posts a new chat message."""
     for_dates = _parse_target_dates(message)
-    all_agents = _build_agents_for_engineer(engineer_id)
+    scheduler, suggesters = _build_agents_for_engineer(engineer_id)
+
+    if scheduler is None:
+        if suggesters:
+            _post_system_chat(
+                engineer_id,
+                "No scheduler agent is designated. Mark one of your agents as the "
+                "scheduler in the Agents page so it can write to your calendar.",
+            )
+        return
+
     broadcast = _all_agents_addressed(message)
 
-    relevant = []
-    for agent in all_agents:
+    # Relevance filter (suggesters only — scheduler always engages when there
+    # is a scheduling-related message, since it is the one writing the calendar).
+    relevant_suggesters = []
+    for agent in suggesters:
         if broadcast:
-            relevant.append(agent)
+            relevant_suggesters.append(agent)
             agent.write_status(Agent.DELIBERATING)
         else:
             try:
                 if agent.is_relevant(message):
-                    relevant.append(agent)
+                    relevant_suggesters.append(agent)
                 else:
                     agent.write_status(Agent.COMMITTED)
             except Exception:
                 logger.exception(f'Self-eval failed for agent / engineer {engineer_id}')
 
-    if not relevant:
-        return
-
-    # Split relevant agents into those being asked to remove vs. those being asked to schedule
-    to_schedule = []
-    for agent in relevant:
-        try:
-            if agent.is_removal_directive(message):
-                for for_date in for_dates:
-                    agent.cancel_entries(engineer_id, for_date)
-            else:
-                to_schedule.append(agent)
-        except Exception:
-            logger.exception(f'Removal check failed for agent / engineer {engineer_id}')
-            to_schedule.append(agent)
+    # Removal directive — only the scheduler can clear entries.
+    try:
+        if scheduler.is_removal_directive(message):
+            for for_date in for_dates:
+                scheduler.cancel_entries(engineer_id, for_date)
+            # Suggesters have nothing to remove; mark them committed.
+            for agent in relevant_suggesters:
+                try:
+                    agent.write_status(Agent.COMMITTED)
+                except Exception:
+                    pass
+            return
+    except Exception:
+        logger.exception(f'Removal check failed for engineer {engineer_id}')
 
     for for_date in for_dates:
-        if to_schedule:
-            _run_cycle(engineer_id, for_date, to_schedule)
-
-
+        _run_cycle(engineer_id, for_date, scheduler, relevant_suggesters)

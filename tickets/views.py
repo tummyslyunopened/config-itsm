@@ -756,7 +756,11 @@ def _provision_agent_ops_user(name):
 @require_role('engineer')
 def agent_list(request):
     agents = Agent.objects.filter(engineer=request.user).order_by('priority')
-    return render(request, 'tickets/agents_list.html', {'agents': agents})
+    has_scheduler = any(a.is_scheduler for a in agents)
+    return render(request, 'tickets/agents_list.html', {
+        'agents': agents,
+        'has_scheduler': has_scheduler,
+    })
 
 
 @require_role('engineer')
@@ -766,6 +770,7 @@ def agent_create(request):
         name = request.POST.get('name', '').strip()
         system_prompt = request.POST.get('system_prompt', '').strip()
         priority_raw = request.POST.get('priority', '').strip()
+        is_scheduler = request.POST.get('is_scheduler') == 'on'
 
         if not name:
             error = 'Name is required.'
@@ -776,17 +781,29 @@ def agent_create(request):
         elif Agent.objects.filter(engineer=request.user, priority=int(priority_raw)).exists():
             error = f'You already have an agent with priority {priority_raw}.'
         else:
-            ops_user = _provision_agent_ops_user(name)
-            Agent.objects.create(
-                engineer=request.user,
-                ops_user=ops_user,
-                name=name,
-                system_prompt=system_prompt,
-                priority=int(priority_raw),
-            )
+            from django.db import transaction
+            with transaction.atomic():
+                if is_scheduler:
+                    Agent.objects.filter(
+                        engineer=request.user, is_scheduler=True,
+                    ).update(is_scheduler=False)
+                ops_user = _provision_agent_ops_user(name)
+                Agent.objects.create(
+                    engineer=request.user,
+                    ops_user=ops_user,
+                    name=name,
+                    system_prompt=system_prompt,
+                    priority=int(priority_raw),
+                    is_scheduler=is_scheduler,
+                )
             return redirect('agents_list')
 
-    return render(request, 'tickets/agents_create.html', {'error': error})
+    has_scheduler = Agent.objects.filter(
+        engineer=request.user, is_scheduler=True,
+    ).exists()
+    return render(request, 'tickets/agents_create.html', {
+        'error': error, 'has_scheduler': has_scheduler,
+    })
 
 
 @require_role('engineer')
@@ -822,6 +839,7 @@ def agent_edit(request, pk):
         name = request.POST.get('name', '').strip()
         system_prompt = request.POST.get('system_prompt', '').strip()
         priority_raw = request.POST.get('priority', '').strip()
+        is_scheduler = request.POST.get('is_scheduler') == 'on'
 
         if not name:
             error = 'Name is required.'
@@ -837,13 +855,28 @@ def agent_edit(request, pk):
         ):
             error = f'You already have an agent with priority {priority_raw}.'
         else:
-            agent.name = name
-            agent.system_prompt = system_prompt
-            agent.priority = int(priority_raw)
-            agent.save()
+            from django.db import transaction
+            with transaction.atomic():
+                if is_scheduler and not agent.is_scheduler:
+                    Agent.objects.filter(
+                        engineer=request.user, is_scheduler=True,
+                    ).exclude(pk=agent.pk).update(is_scheduler=False)
+                agent.name = name
+                agent.system_prompt = system_prompt
+                agent.priority = int(priority_raw)
+                agent.is_scheduler = is_scheduler
+                agent.save()
             return redirect('agents_list')
 
-    return render(request, 'tickets/agents_edit.html', {'agent': agent, 'error': error})
+    other_scheduler = (
+        Agent.objects
+        .filter(engineer=request.user, is_scheduler=True)
+        .exclude(pk=agent.pk)
+        .first()
+    )
+    return render(request, 'tickets/agents_edit.html', {
+        'agent': agent, 'error': error, 'other_scheduler': other_scheduler,
+    })
 
 
 @require_role('engineer')

@@ -154,11 +154,19 @@ class Agent(models.Model):
     priority = models.IntegerField()
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=DELIBERATING)
     document = models.TextField(blank=True, default='')
+    is_scheduler = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ['priority']
         unique_together = [('engineer', 'priority')]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['engineer'],
+                condition=models.Q(is_scheduler=True),
+                name='one_scheduler_per_engineer',
+            ),
+        ]
 
     def __str__(self):
         return f'{self.name} ({self.engineer.username})'
