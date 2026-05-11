@@ -168,6 +168,7 @@ Ordered by `sent_at` ascending.
 | View own chat                                               | ✗   | ✓        |
 | View any engineer's chat                                    | ✓   | ✗        |
 | Create / edit own agents                                    | ✗   | ✓        |
+| Delete own agents                                           | ✗   | ✓        |
 | View own agents list and one-on-one chats                   | ✗   | ✓        |
 | Post to own agent's one-on-one chat                         | ✗   | ✓        |
 | Trigger "commit to state" on own agent                      | ✗   | ✓        |
@@ -430,6 +431,7 @@ agents/
 | `/agents/suggest-prompt/`     | Engineer | POST `{name, priority, existing_prompt, user_prompt, [agent_pk]}` → JSON `{prompt}`; generates a system prompt via Claude using the agent name, current prompt, user instructions, and engineer's work schedule. Inspects `priority` to determine whether this agent is the scheduler (lowest priority for the engineer) and tailors the prompt's role section accordingly |
 | `/agents/<id>/`               | Engineer | One-on-one chat with an agent + Commit to State button            |
 | `/agents/<id>/edit/`          | Engineer | Edit an agent's name, priority, and system prompt                 |
+| `/agents/<id>/delete/`        | Engineer | POST — delete the agent and its provisioned ops user, API key, and chat history |
 
 ---
 
@@ -547,6 +549,7 @@ All `start` and `end` time fields across schedule entries, time entries, and wor
 ### Agent List — `/agents/`
 - Engineer only.
 - Lists all agents belonging to the logged-in engineer, showing name, priority, role (Scheduler / Suggester — derived from priority order), current status, and links to the chat and edit views.
+- Each row also has a **Delete** button that POSTs to `/agents/<id>/delete/` after a confirmation prompt. Deletion removes the agent record, its `AgentMessage` history, its auto-provisioned ops `User`, the linked `ApiKey`, and any `ChatMessage` rows the ops user sent. Past `ScheduleEntry` rows the agent created remain on the calendar with `created_by` nulled (becoming locked manual-style entries). If the deleted agent was the scheduler, the next-highest-priority remaining agent automatically becomes the scheduler via the existing priority-derived rule.
 - An informational note at the top reminds the engineer that the highest-priority (lowest number) agent is automatically the scheduler.
 - A **Create Agent** button links to `/agents/create/`.
 

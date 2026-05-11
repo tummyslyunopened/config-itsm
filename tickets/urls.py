@@ -22,6 +22,7 @@ urlpatterns = [
     path('agents/suggest-prompt/', views.agent_suggest_prompt, name='agent_suggest_prompt'),
     path('agents/<int:pk>/', views.agent_chat, name='agent_chat'),
     path('agents/<int:pk>/edit/', views.agent_edit, name='agent_edit'),
+    path('agents/<int:pk>/delete/', views.agent_delete, name='agent_delete'),
 
     # AI agent API
     path('api/tickets/', api_views.ticket_list, name='api_ticket_list'),
