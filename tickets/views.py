@@ -972,6 +972,18 @@ def agent_edit(request, pk):
 
 
 @require_role('engineer')
+def agent_delete(request, pk):
+    agent = get_object_or_404(Agent, pk=pk, engineer=request.user)
+    if request.method != 'POST':
+        return HttpResponseForbidden()
+    with transaction.atomic():
+        ops_user = agent.ops_user
+        agent.delete()
+        ops_user.delete()
+    return redirect('agents_list')
+
+
+@require_role('engineer')
 def agent_suggest_prompt(request):
     """POST {name} → JSON {prompt}. Uses Claude to draft a system prompt for the agent."""
     if request.method != 'POST':
