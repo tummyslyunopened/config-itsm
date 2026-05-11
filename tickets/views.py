@@ -328,7 +328,7 @@ def _week_monday(anchor):
 @require_role('engineer')
 def calendar_view(request):
     today = date.today()
-    view_mode = request.GET.get('view', 'day')
+    view_mode = request.GET.get('view', 'agenda')
 
     try:
         ws = request.user.work_schedule
@@ -353,21 +353,42 @@ def calendar_view(request):
         })
 
     if view_mode == 'agenda':
-        schedule_entries = list(
+        now = timezone.now()
+        past_cutoff = now - timedelta(hours=24)
+
+        past_schedule = list(
             ScheduleEntry.objects
-            .filter(engineer=request.user, start__date__gte=today)
-            .select_related('ticket').order_by('start')[:60]
+            .filter(engineer=request.user, start__gte=past_cutoff, start__lt=now)
+            .select_related('ticket').order_by('start')
         )
-        time_entries = list(
+        past_time = list(
             TimeEntry.objects
-            .filter(engineer=request.user, start__date__gte=today)
-            .select_related('ticket').order_by('start')[:60]
+            .filter(engineer=request.user, start__gte=past_cutoff, start__lt=now)
+            .select_related('ticket').order_by('start')
         )
-        agenda = sorted(
-            [{'kind': 'schedule', 'entry': e} for e in schedule_entries] +
-            [{'kind': 'time',     'entry': e} for e in time_entries],
+        past_items = sorted(
+            [{'kind': 'schedule', 'entry': e} for e in past_schedule] +
+            [{'kind': 'time',     'entry': e} for e in past_time],
             key=lambda x: x['entry'].start,
         )
+
+        future_schedule = list(
+            ScheduleEntry.objects
+            .filter(engineer=request.user, start__gte=now)
+            .select_related('ticket').order_by('start')[:10]
+        )
+        future_time = list(
+            TimeEntry.objects
+            .filter(engineer=request.user, start__gte=now)
+            .select_related('ticket').order_by('start')[:10]
+        )
+        future_items = sorted(
+            [{'kind': 'schedule', 'entry': e} for e in future_schedule] +
+            [{'kind': 'time',     'entry': e} for e in future_time],
+            key=lambda x: x['entry'].start,
+        )[:10]
+
+        agenda = past_items + future_items
         chat_msgs = (
             ChatMessage.objects
             .filter(engineer=request.user, hidden=False)

@@ -124,7 +124,7 @@
     {% elif view_mode == 'agenda' %}
     {# ── AGENDA ── #}
     <div style="flex:1;overflow-y:auto;padding-bottom:1rem;">
-      <div style="margin-bottom:.75rem;font-size:13px;color:#64748b;">Upcoming — next 60 entries</div>
+      <div style="margin-bottom:.75rem;font-size:13px;color:#64748b;">Last 24 hours and next 10 upcoming entries</div>
       {% if agenda_entries %}
       <div class="card" style="padding:0;overflow:hidden;">
         {% for item in agenda_entries %}
