@@ -76,9 +76,14 @@
     .view-tabs { display: flex; gap: .25rem; flex-wrap: wrap; }
 
     /* agenda */
-    .agenda-row { display: flex; gap: 1rem; align-items: flex-start; padding: .6rem .75rem; border-bottom: 1px solid #f1f5f9; }
+    .agenda-row { display: flex; gap: 1rem; align-items: flex-start; padding: .6rem .75rem; border-bottom: 1px solid #f1f5f9; background: #fff; }
     .agenda-row:last-child { border-bottom: none; }
     .agenda-date { min-width: 110px; font-size: 12px; color: #64748b; }
+    .agenda-row[data-dismiss-key] { touch-action: pan-y; user-select: none; -webkit-user-select: none; will-change: transform; }
+    .agenda-row.is-swiping { transition: none; }
+    .agenda-row.is-snapping { transition: transform 150ms ease-out, opacity 150ms ease-out; }
+    .agenda-row.is-dismissing { transition: transform 180ms ease-out, opacity 180ms ease-out; }
+    .agenda-show-hidden { display: inline-block; margin-left: .5rem; font-size: 12px; color: #2563eb; cursor: pointer; }
 
     /* positioned calendar grid */
     .cal-outer { border: 1px solid #e2e8f0; border-radius: 6px; overflow: hidden; background: #fff; }

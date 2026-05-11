@@ -477,6 +477,7 @@ All `start` and `end` time fields across schedule entries, time entries, and wor
 - **Two-pane layout:** the calendar fills the left pane; a live chat panel occupies a fixed-width right pane. The two panes fill the full viewport height below the nav bar.
 - Four view modes: **agenda** (default), **day**, **week**, **instructions**. Toggle via buttons in the calendar pane header.
 - **Agenda view** shows the engineer's schedule entries and time entries combined into one chronological list: all entries whose `start` falls within the last 24 hours (i.e. `now - 24h ≤ start < now`), followed by the next 10 upcoming entries with `start ≥ now`.
+- **Swipe-to-dismiss** on the agenda: the engineer can swipe a row leftward (pointer or touch) to hide it from the agenda. Dismissals are persisted in `localStorage` only — the underlying schedule or time entries are not modified, and the dismissal does not sync across devices or browsers. A `(show N hidden)` link appears next to the agenda header whenever rows are hidden; clicking it restores every dismissed row. Stored keys that don't match a currently-rendered row are pruned on load so the list stays bounded as entries roll out of the 24-hour / next-10 window.
 - Shows schedule entries and time entries for the logged-in engineer.
 - Schedule entries render in blue; time entries in green.
 - Clicking an entry navigates to that ticket's detail page.

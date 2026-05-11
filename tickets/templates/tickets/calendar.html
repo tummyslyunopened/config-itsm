@@ -123,12 +123,15 @@
 
     {% elif view_mode == 'agenda' %}
     {# ── AGENDA ── #}
-    <div style="flex:1;overflow-y:auto;padding-bottom:1rem;">
-      <div style="margin-bottom:.75rem;font-size:13px;color:#64748b;">Last 24 hours and next 10 upcoming entries</div>
+    <div style="flex:1;overflow-y:auto;padding-bottom:1rem;" id="agenda-pane">
+      <div style="margin-bottom:.75rem;font-size:13px;color:#64748b;">
+        Last 24 hours and next 10 upcoming entries
+        <a href="#" id="agenda-show-hidden" class="agenda-show-hidden" style="display:none;"></a>
+      </div>
       {% if agenda_entries %}
-      <div class="card" style="padding:0;overflow:hidden;">
+      <div class="card" id="agenda-list" style="padding:0;overflow:hidden;">
         {% for item in agenda_entries %}
-        <div class="agenda-row">
+        <div class="agenda-row" data-dismiss-key="{{ item.kind }}-{{ item.entry.id }}">
           <div class="agenda-date">
             {{ item.entry.start|date:"D, M j" }}<br>
             <span style="font-size:11px;">{{ item.entry.start|date:"H:i" }}–{{ item.entry.end|date:"H:i" }}</span>
@@ -144,6 +147,7 @@
         </div>
         {% endfor %}
       </div>
+      <p id="agenda-empty-msg" style="color:#64748b;{% if agenda_entries %}display:none;{% endif %}">No upcoming entries.</p>
       {% else %}
       <p style="color:#64748b;">No upcoming entries.</p>
       {% endif %}
@@ -431,6 +435,179 @@
   function updateStopBtn(isTyping) {
     if (stopBtn) stopBtn.style.display = isTyping ? '' : 'none';
   }
+
+  /* ── agenda swipe-to-dismiss ── */
+  {% if view_mode == 'agenda' %}
+  (function initAgendaSwipe() {
+    var STORAGE_KEY = 'itsm.agenda.dismissed.v1';
+    var COMMIT_PX = 80;
+    var LOCK_PX = 8;
+
+    var rows = document.querySelectorAll('.agenda-row[data-dismiss-key]');
+    if (!rows.length) return;
+
+    var presentKeys = {};
+    rows.forEach(function (r) { presentKeys[r.getAttribute('data-dismiss-key')] = true; });
+
+    var stored;
+    try { stored = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'); }
+    catch (e) { stored = []; }
+    if (!Array.isArray(stored)) stored = [];
+
+    var dismissedSet = {};
+    stored.forEach(function (k) { if (presentKeys[k]) dismissedSet[k] = true; });
+    persist();
+
+    var listEl = document.getElementById('agenda-list');
+    var emptyMsg = document.getElementById('agenda-empty-msg');
+    var showHidden = document.getElementById('agenda-show-hidden');
+
+    function persist() {
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(Object.keys(dismissedSet))); }
+      catch (e) {}
+    }
+    function visibleRowCount() {
+      var n = 0;
+      rows.forEach(function (r) { if (r.style.display !== 'none') n++; });
+      return n;
+    }
+    function refreshShowHidden() {
+      var n = Object.keys(dismissedSet).length;
+      if (!showHidden) return;
+      if (n > 0) {
+        showHidden.textContent = '(show ' + n + ' hidden)';
+        showHidden.style.display = '';
+      } else {
+        showHidden.style.display = 'none';
+      }
+    }
+    function refreshEmpty() {
+      if (!emptyMsg || !listEl) return;
+      if (visibleRowCount() === 0) {
+        listEl.style.display = 'none';
+        emptyMsg.style.display = '';
+      } else {
+        listEl.style.display = '';
+        emptyMsg.style.display = 'none';
+      }
+    }
+
+    rows.forEach(function (row) {
+      var key = row.getAttribute('data-dismiss-key');
+      if (dismissedSet[key]) row.style.display = 'none';
+    });
+    refreshShowHidden();
+    refreshEmpty();
+
+    if (showHidden) {
+      showHidden.addEventListener('click', function (e) {
+        e.preventDefault();
+        dismissedSet = {};
+        persist();
+        rows.forEach(function (row) {
+          row.style.display = '';
+          row.style.transform = '';
+          row.style.opacity = '';
+          row.classList.remove('is-swiping', 'is-snapping', 'is-dismissing');
+        });
+        refreshShowHidden();
+        refreshEmpty();
+      });
+    }
+
+    rows.forEach(function (row) {
+      var startX = 0, startY = 0, dx = 0, dy = 0;
+      var active = false, axis = null, pid = null, suppressClick = false;
+
+      function setProgress(translate) {
+        row.style.transform = 'translateX(' + translate + 'px)';
+        var alpha = Math.max(0.25, 1 - Math.abs(translate) / 240);
+        row.style.opacity = String(alpha);
+      }
+      function reset() {
+        active = false; axis = null; pid = null;
+        dx = 0; dy = 0;
+      }
+      function snapBack() {
+        row.classList.remove('is-swiping');
+        row.classList.add('is-snapping');
+        row.style.transform = '';
+        row.style.opacity = '';
+        setTimeout(function () { row.classList.remove('is-snapping'); }, 160);
+      }
+      function commitDismiss() {
+        row.classList.remove('is-swiping');
+        row.classList.add('is-dismissing');
+        row.style.transform = 'translateX(-110%)';
+        row.style.opacity = '0';
+        dismissedSet[row.getAttribute('data-dismiss-key')] = true;
+        persist();
+        setTimeout(function () {
+          row.style.display = 'none';
+          row.classList.remove('is-dismissing');
+          refreshShowHidden();
+          refreshEmpty();
+        }, 190);
+      }
+
+      row.addEventListener('pointerdown', function (e) {
+        if (e.button && e.button !== 0) return;
+        if (e.pointerType === 'mouse' && e.button !== 0) return;
+        active = true;
+        pid = e.pointerId;
+        startX = e.clientX;
+        startY = e.clientY;
+        dx = 0; dy = 0;
+        axis = null;
+        suppressClick = false;
+        row.classList.remove('is-snapping', 'is-dismissing');
+      });
+
+      row.addEventListener('pointermove', function (e) {
+        if (!active || e.pointerId !== pid) return;
+        dx = e.clientX - startX;
+        dy = e.clientY - startY;
+        if (axis === null) {
+          if (Math.abs(dx) < LOCK_PX && Math.abs(dy) < LOCK_PX) return;
+          axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
+          if (axis === 'x') {
+            row.classList.add('is-swiping');
+            try { row.setPointerCapture(pid); } catch (err) {}
+          }
+        }
+        if (axis !== 'x') return;
+        e.preventDefault();
+        suppressClick = true;
+        setProgress(Math.min(0, dx));
+      });
+
+      function finish(e) {
+        if (!active || e.pointerId !== pid) return;
+        try { row.releasePointerCapture(pid); } catch (err) {}
+        if (axis === 'x') {
+          if (dx <= -COMMIT_PX) commitDismiss();
+          else snapBack();
+        }
+        reset();
+      }
+      row.addEventListener('pointerup', finish);
+      row.addEventListener('pointercancel', function (e) {
+        if (!active || e.pointerId !== pid) return;
+        try { row.releasePointerCapture(pid); } catch (err) {}
+        if (axis === 'x') snapBack();
+        reset();
+      });
+
+      row.addEventListener('click', function (e) {
+        if (suppressClick) {
+          e.preventDefault();
+          e.stopPropagation();
+          suppressClick = false;
+        }
+      }, true);
+    });
+  })();
+  {% endif %}
 
   /* ── report a chat message ── */
   thread.addEventListener('click', function (e) {
